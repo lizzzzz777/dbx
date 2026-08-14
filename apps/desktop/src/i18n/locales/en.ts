@@ -3066,6 +3066,8 @@ export default {
     username: "Username",
     host: "Host",
     addHost: "Add Host",
+    changeHost: "Change Host",
+    newHost: "New Host",
     changePassword: "Change Password",
     newPassword: "New password",
     lock: "Lock",

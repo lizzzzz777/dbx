@@ -2910,6 +2910,8 @@ export default withEnglishFallback({
     revoke: "Revogar",
     username: "Nome de usuário",
     host: "Host",
+    changeHost: "Alterar host",
+    newHost: "Novo host",
     changePassword: "Alterar Senha",
     newPassword: "Nova senha",
     lock: "Bloquear",

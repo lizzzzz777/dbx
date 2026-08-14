@@ -2908,6 +2908,8 @@ export default withEnglishFallback({
     revoke: "Revoca",
     username: "Nome utente",
     host: "Host",
+    changeHost: "Modifica host",
+    newHost: "Nuovo host",
     changePassword: "Cambia Password",
     newPassword: "Nuova password",
     lock: "Blocca",

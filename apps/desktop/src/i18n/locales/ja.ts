@@ -2971,6 +2971,8 @@ export default withEnglishFallback({
     revoke: "取り消し",
     username: "ユーザー名",
     host: "ホスト",
+    changeHost: "ホストを変更",
+    newHost: "新しいホスト",
     changePassword: "パスワードを変更",
     newPassword: "新しいパスワード",
     lock: "ロック",

@@ -3055,6 +3055,8 @@ export default withEnglishFallback({
     revoke: "撤权",
     username: "用户名",
     host: "Host",
+    changeHost: "修改主机",
+    newHost: "新主机",
     changePassword: "修改密码",
     newPassword: "新密码",
     lock: "锁定",

@@ -5839,6 +5839,8 @@ export default withEnglishFallback({
     revoke: "撤銷",
     username: "使用者名稱",
     host: "主機",
+    changeHost: "變更主機",
+    newHost: "新主機",
     changePassword: "變更密碼",
     newPassword: "新密碼",
     lock: "鎖定",

@@ -2912,6 +2912,8 @@ export default withEnglishFallback({
     revoke: "권한 회수",
     username: "사용자 이름",
     host: "호스트",
+    changeHost: "호스트 변경",
+    newHost: "새 호스트",
     changePassword: "비밀번호 변경",
     newPassword: "새 비밀번호",
     lock: "잠금",
