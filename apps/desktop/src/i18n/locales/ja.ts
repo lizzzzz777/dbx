@@ -1838,6 +1838,7 @@ export default withEnglishFallback({
     copyExtractorSqlInsertsWithPrimaryKeys: "SQL INSERT 文（主キーを含む）",
     copyExtractorSqlInsertsWithoutPrimaryKeys: "SQL INSERT 文（主キーを除外）",
     copyExtractorSqlUpdates: "SQL UPDATE 文",
+    copyExtractorSqlSelect: "SQL SELECT 文",
     copyExtractorWhereClause: "WHERE 条件",
     copyExtractorPipeSeparated: "パイプ区切り",
     copyExtractorPretty: "テーブルテキスト",

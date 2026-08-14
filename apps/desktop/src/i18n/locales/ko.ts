@@ -1371,6 +1371,7 @@ export default withEnglishFallback({
     copyExtractorSqlInsertsWithPrimaryKeys: "SQL INSERT (기본 키 포함)",
     copyExtractorSqlInsertsWithoutPrimaryKeys: "SQL INSERT (기본 키 제외)",
     copyExtractorSqlUpdates: "SQL UPDATE",
+    copyExtractorSqlSelect: "SQL SELECT",
     copyExtractorWhereClause: "WHERE 절",
     copyExtractorPipeSeparated: "파이프(|) 구분",
     copyExtractorPretty: "보기 좋은 표",

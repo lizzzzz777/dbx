@@ -1816,6 +1816,7 @@ export default withEnglishFallback({
     copyExtractorSqlInsertsWithPrimaryKeys: "Istruzioni SQL INSERT (con chiavi primarie)",
     copyExtractorSqlInsertsWithoutPrimaryKeys: "Istruzioni SQL INSERT (senza chiavi primarie)",
     copyExtractorSqlUpdates: "Istruzioni SQL UPDATE",
+    copyExtractorSqlSelect: "Istruzione SQL SELECT",
     copyExtractorWhereClause: "Clausola WHERE",
     copyExtractorPipeSeparated: "Separato da pipe",
     copyExtractorPretty: "Testo tabellare",
