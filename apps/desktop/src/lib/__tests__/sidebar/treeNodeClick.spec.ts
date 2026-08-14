@@ -61,6 +61,17 @@ describe("treeNodeClick", () => {
     expect(treeNodeRowAction("schema", false, "double", "postgres", true, true)).toBe("open-object-browser");
   });
 
+  it("does not reopen the object browser when the single-click switch already handled the gesture", () => {
+    expect(treeNodeRowDoubleClickAction("database", true, "single", true, "postgres", false, true)).toBe("none");
+    expect(treeNodeRowDoubleClickAction("schema", true, "double", true, "postgres", false, true)).toBe("none");
+    expect(treeNodeRowDoubleClickAction("object-browser", true, "single", false, "postgres", false, true)).toBe("none");
+  });
+
+  it("keeps the existing double-click fallback when single-click browsing is unavailable", () => {
+    expect(treeNodeRowDoubleClickAction("database", true, "single", true, "postgres", false, false)).toBe("open-object-browser");
+    expect(treeNodeRowDoubleClickAction("database", false, "double", true, "postgres", false, true)).toBe("toggle");
+  });
+
   it("keeps the original single-click behavior when the database single-click switch is off or unsupported", () => {
     expect(treeNodeRowAction("database", true, "single", "postgres", false, true)).toBe("toggle");
     expect(treeNodeRowAction("database", true, "double", "postgres", false, true)).toBe("none");

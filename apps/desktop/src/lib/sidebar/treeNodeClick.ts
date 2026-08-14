@@ -133,10 +133,11 @@ export function shouldRunTreeNodeRowAction(action: TreeNodeRowAction, clickDetai
   return action !== "none" && clickDetail <= 1;
 }
 
-export function treeNodeRowDoubleClickAction(type: TreeNodeType, canOpenObjectBrowser: boolean, activation: SidebarActivation = "single", canExpand = false, dbType?: DatabaseType, canOpenDatabaseBrowser = false): TreeNodeRowDoubleClickAction {
+export function treeNodeRowDoubleClickAction(type: TreeNodeType, canOpenObjectBrowser: boolean, activation: SidebarActivation = "single", canExpand = false, dbType?: DatabaseType, canOpenDatabaseBrowser = false, openDatabaseOnSingleClick = false): TreeNodeRowDoubleClickAction {
   // Single-click activation already handles the first click in a dblclick
   // sequence. Only double-click activation needs a second-stage table action.
   if (type === "table") return activation === "double" ? "activate-data" : "none";
+  if (openDatabaseOnSingleClick && canOpenObjectBrowser && shouldOpenObjectBrowserOnSingleClick(type, true)) return "none";
   if (type === "connection" && canOpenDatabaseBrowser) return "open-database-browser";
   if (activation === "double") {
     if (type === "extension") return "open-extension-details";
