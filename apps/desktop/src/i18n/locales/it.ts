@@ -5428,6 +5428,8 @@ export default withEnglishFallback({
     sidebarObjectDisplaySimpleDescription: "Elenca tabelle e viste direttamente sotto ogni database o schema per ridurre i livelli intermedi.",
     autoSelectActiveSidebarNode: "Seleziona sempre l'elemento aperto",
     autoSelectActiveSidebarNodeDescription: "Quando passi da una scheda all'altra, seleziona la tabella, la collezione o il file SQL visibile corrispondente nella barra laterale.",
+    sidebarOpenDatabaseOnSingleClick: "Apri oggetti database con un clic",
+    sidebarOpenDatabaseOnSingleClickDescription: "Se abilitato, un singolo clic su un nodo database o schema espande l'albero laterale e apre la scheda oggetti corrispondente (equivalente al doppio clic).",
     openTabsRestoreMode: "Ripristina schede all'avvio",
     openTabsRestoreModeDescription: "Scegli come DBX ripristina le schede aperte l'ultima volta.",
     openTabsRestoreModeAll: "Mantieni tutte le schede",

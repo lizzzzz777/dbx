@@ -5678,6 +5678,8 @@ export default {
     routineSourceOpenModeDialogDescription: "Open source in a popup dialog for quick viewing and editing.",
     autoSelectActiveSidebarNode: "Always select opened item",
     autoSelectActiveSidebarNodeDescription: "When switching tabs, select the matching visible table, collection, or SQL file in the sidebar.",
+    sidebarOpenDatabaseOnSingleClick: "Open database objects on single click",
+    sidebarOpenDatabaseOnSingleClickDescription: "When enabled, single-clicking a database or schema node expands the sidebar tree and opens its object browser tab (equivalent to double-click).",
     openTabsRestoreMode: "Restore tabs on launch",
     openTabsRestoreModeDescription: "Choose how DBX restores tabs that were open last time.",
     openTabsRestoreModeAll: "Keep all tabs",

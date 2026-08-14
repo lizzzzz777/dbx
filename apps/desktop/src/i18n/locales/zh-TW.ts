@@ -4767,6 +4767,8 @@ export default withEnglishFallback({
     sidebarObjectDisplaySimpleDescription: "直接在每個資料庫或 schema 下列出資料表與檢視，減少中間層級。",
     autoSelectActiveSidebarNode: "一律選取已開啟項目",
     autoSelectActiveSidebarNodeDescription: "切換分頁時，在側邊欄選取相符的可見資料表、集合或 SQL 檔案。",
+    sidebarOpenDatabaseOnSingleClick: "單擊資料庫同時開啟資料庫項目",
+    sidebarOpenDatabaseOnSingleClickDescription: "開啟後，單擊資料庫或結構描述節點時，在展開側邊欄樹的同時開啟對應的資料庫項目分頁（等效於雙擊）。",
     openTabsRestoreMode: "啟動時還原分頁",
     openTabsRestoreModeDescription: "選擇 DBX 啟動時如何還原上次開啟的分頁。",
     openTabsRestoreModeAll: "保留所有分頁",

@@ -5430,6 +5430,8 @@ export default withEnglishFallback({
     sidebarObjectDisplaySimpleDescription: "Listar tabelas e views diretamente sob cada banco de dados ou schema para reduzir os níveis intermediários.",
     autoSelectActiveSidebarNode: "Sempre selecionar o item aberto",
     autoSelectActiveSidebarNodeDescription: "Ao alternar abas, selecionar a tabela, coleção ou arquivo SQL correspondente visível na barra lateral.",
+    sidebarOpenDatabaseOnSingleClick: "Abrir objetos do banco com um clique",
+    sidebarOpenDatabaseOnSingleClickDescription: "Quando ativado, um clique único em um nó de banco de dados ou esquema expande a árvore lateral e abre a aba de objetos correspondente (equivalente ao clique duplo).",
     openTabsRestoreMode: "Restaurar abas ao iniciar",
     openTabsRestoreModeDescription: "Escolha como o DBX restaura as abas que estavam abertas na última vez.",
     openTabsRestoreModeAll: "Manter todas as abas",

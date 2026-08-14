@@ -5455,6 +5455,8 @@ export default withEnglishFallback({
     sidebarObjectDisplaySimpleDescription: "中間レベルを減らすために、各データベースまたはスキーマの直下にテーブルとビューを一覧表示します。",
     autoSelectActiveSidebarNode: "開いた項目を常に選択",
     autoSelectActiveSidebarNodeDescription: "タブ切替時に、サイドバーで一致する表示中のテーブル、コレクション、またはSQLファイルを選択します。",
+    sidebarOpenDatabaseOnSingleClick: "シングルクリックでデータベースオブジェクトを開く",
+    sidebarOpenDatabaseOnSingleClickDescription: "有効にすると、データベースまたはスキーマノードをシングルクリックした際にサイドバーツリーを展開し、対応するオブジェクトブラウザータブを開きます（ダブルクリックと同等）。",
     openTabsRestoreMode: "起動時にタブを復元",
     openTabsRestoreModeDescription: "DBX 起動時に前回開いていたタブをどのように復元するかを選択します。",
     openTabsRestoreModeAll: "すべてのタブを保持",
