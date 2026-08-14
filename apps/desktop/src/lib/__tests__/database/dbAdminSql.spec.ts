@@ -13,7 +13,16 @@ const apiMock = vi.hoisted(() => ({
 
 vi.mock("@/lib/backend/api", () => apiMock);
 
-import { buildDuplicateTableStructurePlan, buildMysqlAutoIncrementSql, collectDuplicateTableColumnComments, damengDropSchemaExecutionSchema, damengDuplicateTableCreateOptions, duplicateTableStructureRequiresScript, oracleDuplicateTableCreateOptions, supportsNativeMysqlAutoIncrement } from "@/lib/database/dbAdminSql";
+import {
+  buildDuplicateTableStructurePlan,
+  buildMysqlAutoIncrementSql,
+  collectDuplicateTableColumnComments,
+  damengDropSchemaExecutionSchema,
+  damengDuplicateTableCreateOptions,
+  duplicateTableStructureRequiresScript,
+  oracleDuplicateTableCreateOptions,
+  supportsNativeMysqlAutoIncrement,
+} from "@/lib/database/dbAdminSql";
 
 beforeEach(() => {
   vi.clearAllMocks();

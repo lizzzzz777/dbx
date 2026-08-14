@@ -6,7 +6,21 @@ import type { DatabaseType, TreeNode } from "@/types/database";
 import { supportsTableTruncate } from "@/lib/database/databaseCapabilities";
 import { buildDropTableSql, buildEmptyTableSql, buildMysqlAutoIncrementSql, buildTruncateTableSql, supportsDropTableCascade, supportsNativeMysqlAutoIncrement, supportsTruncateTableCascade, type MysqlAutoIncrementSqlOptions, type TableAdminSqlOptions } from "@/lib/database/dbAdminSql";
 import { isSqlServerLinkedNode } from "@/lib/database/sqlServerLinkedServers";
-import { sidebarDangerTarget, showDropTableConfirm, showEmptyTableConfirm, showMysqlAutoIncrementConfirm, showTruncateTableConfirm, dropTablePreviewSql, dropTableCascade, emptyTablePreviewSql, mysqlAutoIncrementPreviewKey, mysqlAutoIncrementPreviewSql, mysqlAutoIncrementValue, truncateTablePreviewSql, truncateTableCascade } from "@/components/sidebar/sidebarTreeDialogState";
+import {
+  sidebarDangerTarget,
+  showDropTableConfirm,
+  showEmptyTableConfirm,
+  showMysqlAutoIncrementConfirm,
+  showTruncateTableConfirm,
+  dropTablePreviewSql,
+  dropTableCascade,
+  emptyTablePreviewSql,
+  mysqlAutoIncrementPreviewKey,
+  mysqlAutoIncrementPreviewSql,
+  mysqlAutoIncrementValue,
+  truncateTablePreviewSql,
+  truncateTableCascade,
+} from "@/components/sidebar/sidebarTreeDialogState";
 
 interface SidebarTableMutationRuntimeOptions {
   activeNode: ShallowRef<TreeNode>;
