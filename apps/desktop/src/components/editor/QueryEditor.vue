@@ -1778,7 +1778,7 @@ function runKeymapExtension(codeMirrorKeymap: (typeof import("@codemirror/view")
       codeMirrorKeymap.of([
         {
           key: "Enter",
-          run: codeMirrorInsertNewlineKeepIndent ?? undefined,
+          run: insertNewlineWithoutCompletion,
         },
         ...binding(shortcuts.find, openSearch),
         ...binding(shortcuts.replace, openReplace),
@@ -1840,6 +1840,14 @@ function runKeymapExtension(codeMirrorKeymap: (typeof import("@codemirror/view")
       })),
     ),
   ];
+}
+
+function insertNewlineWithoutCompletion(view: EditorViewType): boolean {
+  codeMirrorCloseCompletion?.(view);
+  suppressNextSqlCompletionAutoStartUntil = Date.now() + 750;
+  const handled = codeMirrorInsertNewlineKeepIndent?.(view) ?? false;
+  if (!handled) suppressNextSqlCompletionAutoStartUntil = 0;
+  return handled;
 }
 
 function extendQueryEditorSelectionForView(currentView: EditorViewType): boolean {
@@ -5600,8 +5608,14 @@ function openReplace(): boolean {
 function scrollCursorIntoView() {
   if (!view.value || !editorViewModule || !editorIsActive) return;
   const pos = view.value.state.selection.main.head;
+  // Use "center" rather than "nearest": by the time this runs, the results pane has already
+  // opened/resized and shrunk the editor viewport, so the cursor's old position is often no
+  // longer visible. "nearest" then pins it right at the new viewport's edge (Fixes #5281: in a
+  // long multi-statement file, the just-executed statement lands flush against the results pane
+  // divider), which is exactly where it's hardest to see and re-click. Centering keeps it
+  // comfortably visible so the user doesn't have to scroll to find/re-run it.
   view.value.dispatch({
-    effects: editorViewModule.EditorView.scrollIntoView(pos, { y: "nearest" }),
+    effects: editorViewModule.EditorView.scrollIntoView(pos, { y: "center" }),
   });
 }
 

@@ -2192,9 +2192,15 @@ fn postgres_tls_client_auth(
                 return Err(format!("sslcert: no certificates found in {cert_path}"));
             }
             let private_key = read_postgres_private_key(key_path)?;
-            builder
-                .with_client_auth_cert(certs, private_key)
-                .map_err(|e| format!("PostgreSQL client certificate/key mismatch or invalid key: {e}"))
+            let provider = rustls::crypto::aws_lc_rs::default_provider();
+            let signing_key = provider
+                .key_provider
+                .load_private_key(private_key)
+                .map_err(|e| format!("PostgreSQL client private key is invalid: {e}"))?;
+            // rustls' convenience builder parses the leaf with webpki while matching keys,
+            // which rejects otherwise usable X.509 v1 client certificates before TLS starts.
+            let certified_key = rustls::sign::CertifiedKey::new(certs, signing_key);
+            Ok(builder.with_client_cert_resolver(Arc::new(rustls::sign::SingleCertAndKey::from(certified_key))))
         }
         (Some(_), None) => Err("PostgreSQL sslcert requires sslkey".to_string()),
         (None, Some(_)) => Err("PostgreSQL sslkey requires sslcert".to_string()),
@@ -7722,6 +7728,94 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.contains("sslkey"));
+    }
+
+    #[test]
+    fn postgres_tls_rejects_empty_client_certificate() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let dir = std::env::temp_dir();
+        let suffix = uuid::Uuid::new_v4().simple();
+        let cert = dir.join(format!("dbx-postgres-empty-client-{suffix}.crt"));
+        let key = dir.join(format!("dbx-postgres-empty-client-{suffix}.key"));
+        std::fs::write(&cert, []).unwrap();
+        std::fs::write(&key, []).unwrap();
+        let pg_config = tokio_postgres::Config::from_str("postgres://localhost/db?sslmode=require").unwrap();
+        let ssl_files = PostgresSslFiles {
+            sslcert: Some(cert.to_string_lossy().into_owned()),
+            sslkey: Some(key.to_string_lossy().into_owned()),
+            sslrootcert: None,
+        };
+
+        let error = postgres_tls_config(&pg_config, &ssl_files, true, false)
+            .expect_err("empty client certificate should fail before connecting");
+        assert!(error.contains("no certificates"), "{error}");
+
+        let _ = std::fs::remove_file(cert);
+        let _ = std::fs::remove_file(key);
+    }
+
+    #[test]
+    fn postgres_tls_rejects_malformed_private_key() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let dir = std::env::temp_dir();
+        let suffix = uuid::Uuid::new_v4().simple();
+        let cert = dir.join(format!("dbx-postgres-client-{suffix}.crt"));
+        let key = dir.join(format!("dbx-postgres-malformed-client-{suffix}.key"));
+        std::fs::write(&cert, "-----BEGIN CERTIFICATE-----\nMAA=\n-----END CERTIFICATE-----\n").unwrap();
+        std::fs::write(&key, "-----BEGIN PRIVATE KEY-----\nMAA=\n-----END PRIVATE KEY-----\n").unwrap();
+        let pg_config = tokio_postgres::Config::from_str("postgres://localhost/db?sslmode=require").unwrap();
+        let ssl_files = PostgresSslFiles {
+            sslcert: Some(cert.to_string_lossy().into_owned()),
+            sslkey: Some(key.to_string_lossy().into_owned()),
+            sslrootcert: None,
+        };
+
+        let error = postgres_tls_config(&pg_config, &ssl_files, true, false)
+            .expect_err("malformed private key should fail before connecting");
+        assert!(error.contains("client private key is invalid"), "{error}");
+
+        let _ = std::fs::remove_file(cert);
+        let _ = std::fs::remove_file(key);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DBX_TEST_POSTGRES_MTLS_URL pointing at PostgreSQL 14 with required client certificates"]
+    async fn postgres_mtls_accepts_configured_client_identity() {
+        let url = std::env::var("DBX_TEST_POSTGRES_MTLS_URL").expect("DBX_TEST_POSTGRES_MTLS_URL");
+        let pool = connect(&url, Duration::from_secs(5)).await.expect("connect with client certificate");
+        let client = pool.get().await.expect("get PostgreSQL mTLS client");
+        let row = client
+            .query_one(
+                "SELECT current_user, ssl, current_setting('server_version_num')::int \
+                 FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+                &[],
+            )
+            .await
+            .expect("query PostgreSQL TLS session");
+
+        assert_eq!(row.get::<_, String>(0), "db");
+        assert!(row.get::<_, bool>(1));
+        assert!((140_000..150_000).contains(&row.get::<_, i32>(2)));
+    }
+
+    #[test]
+    #[ignore = "requires DBX_TEST_POSTGRES_MTLS_URL with a valid client certificate"]
+    fn postgres_mtls_cancel_connector_reuses_client_identity() {
+        let url = std::env::var("DBX_TEST_POSTGRES_MTLS_URL").expect("DBX_TEST_POSTGRES_MTLS_URL");
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let context = build_postgres_cancel_context(&url).expect("build PostgreSQL TLS cancel context");
+
+        make_rustls_connect_from_context(&context).expect("rebuild TLS connector with client certificate");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DBX_TEST_POSTGRES_MTLS_REJECT_URL that the TLS server must reject"]
+    async fn postgres_mtls_rejects_invalid_tls_identity() {
+        let url = std::env::var("DBX_TEST_POSTGRES_MTLS_REJECT_URL").expect("DBX_TEST_POSTGRES_MTLS_REJECT_URL");
+        let error =
+            connect(&url, Duration::from_secs(5)).await.expect_err("invalid TLS identity must not authenticate");
+
+        assert!(error.contains("PostgreSQL connection failed"), "{error}");
     }
 
     #[test]

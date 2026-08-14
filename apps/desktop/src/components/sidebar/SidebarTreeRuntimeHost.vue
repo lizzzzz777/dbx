@@ -101,7 +101,7 @@ import {
   usesTreeSchemaMode,
   isSingleDatabase,
 } from "@/lib/database/databaseCapabilities";
-import { copyNameForTreeNode, isDirectNavigationTreeNode, isDocumentBrowserTreeNode, objectSourceTargetForTreeNode, shouldRunTreeNodeRowAction, treeNodeRowAction, treeNodeRowDoubleClickAction } from "@/lib/sidebar/treeNodeClick";
+import { copyDisplayPathForTreeNode, copyNameForTreeNode, isDirectNavigationTreeNode, isDocumentBrowserTreeNode, objectSourceTargetForTreeNode, shouldRunTreeNodeRowAction, treeNodeRowAction, treeNodeRowDoubleClickAction } from "@/lib/sidebar/treeNodeClick";
 import { customTypeCapabilities, supportsTypeObjectSource } from "@/lib/database/databaseObjectCapabilities";
 import { mongoCollectionTableTypeFromNode, mongoDropIndexFailureCount } from "@/lib/sidebar/mongoCollectionMutation";
 import { dataTabOpenModeFromTreeClick, type DataTabOpenMode } from "@/lib/sidebar/dataTabOpenPolicy";
@@ -503,6 +503,10 @@ function routeTreeItemDialogController() {
 
 const sidebarTreeContext = inject(sidebarTreeContextKey, null);
 
+function shouldReleaseCollapsedTreeNodeChildren(): boolean {
+  return !connectionStore.sidebarSearchQuery && !sidebarTreeContext?.isSearchProjectionActive?.();
+}
+
 function currentDatabaseType(): DatabaseType | undefined {
   return activeNode.value.connectionId ? effectiveDatabaseTypeForConnection(connectionStore.getConfig(activeNode.value.connectionId)) : undefined;
 }
@@ -566,6 +570,7 @@ async function openDirectNavigationNode(node: TreeNode) {
 
 async function toggle() {
   const node = activeNode.value;
+  const treeLoadSearchOptions = sidebarTreeContext?.getTreeLoadSearchOptions?.(node);
   if (isDirectNavigationTreeNode(node.type)) {
     try {
       await openDirectNavigationNode(node);
@@ -583,7 +588,7 @@ async function toggle() {
   if (node.isLoading) {
     if (node.isExpanded) {
       node.isExpanded = false;
-      if (!connectionStore.sidebarSearchQuery) connectionStore.releaseCollapsedTreeNodeChildren(node.id);
+      if (shouldReleaseCollapsedTreeNodeChildren()) connectionStore.releaseCollapsedTreeNodeChildren(node.id);
       connectionStore.cancelTreeNodeLoad(node.id);
       emitNodeToggled(node, true, false);
     } else {
@@ -620,7 +625,7 @@ async function toggle() {
   const databaseObjectGroup = !!objectTypesForGroupNode(node.type);
   if (databaseObjectGroup && connectionStore.canUseLoadedTreeNodeToggle(node)) {
     node.isExpanded = !node.isExpanded;
-    if (wasExpanded && !connectionStore.sidebarSearchQuery) connectionStore.releaseCollapsedTreeNodeChildren(node.id);
+    if (wasExpanded && shouldReleaseCollapsedTreeNodeChildren()) connectionStore.releaseCollapsedTreeNodeChildren(node.id);
     emitNodeToggled(node, wasExpanded);
     return;
   }
@@ -639,20 +644,20 @@ async function toggle() {
 
   if (node.type === "group-extensions" && connectionStore.canUseLoadedTreeNodeToggle(node)) {
     node.isExpanded = !node.isExpanded;
-    if (wasExpanded && !connectionStore.sidebarSearchQuery) connectionStore.releaseCollapsedTreeNodeChildren(node.id);
+    if (wasExpanded && shouldReleaseCollapsedTreeNodeChildren()) connectionStore.releaseCollapsedTreeNodeChildren(node.id);
     emitNodeToggled(node, wasExpanded);
     return;
   }
 
   if (isXuguTypeMemberContainer(node, connectionStore.getConfig(node.connectionId || "")?.db_type)) {
-    await connectionStore.loadXuguTypeMembers(node);
+    await connectionStore.loadXuguTypeMembers(node, { preserveCollapsedChildren: !shouldReleaseCollapsedTreeNodeChildren() });
     emitNodeToggled(node, wasExpanded);
     return;
   }
 
   if (node.isExpanded) {
     node.isExpanded = false;
-    if (!connectionStore.sidebarSearchQuery) connectionStore.releaseCollapsedTreeNodeChildren(node.id);
+    if (shouldReleaseCollapsedTreeNodeChildren()) connectionStore.releaseCollapsedTreeNodeChildren(node.id);
     emitNodeToggled(node, wasExpanded, false);
     return;
   }
@@ -664,7 +669,7 @@ async function toggle() {
       return;
     }
 
-    if (await loadSidebarObjectGroup(node, connectionStore)) {
+    if (await loadSidebarObjectGroup(node, connectionStore, treeLoadSearchOptions)) {
       emitNodeToggled(node, wasExpanded);
       return;
     }
@@ -697,11 +702,11 @@ async function toggle() {
       } else if (config?.db_type === "mq") {
         await connectionStore.loadMqTenants(node.connectionId);
       } else if (config?.db_type === "nacos") {
-        await connectionStore.loadNacosNamespaces(node.connectionId);
+        await connectionStore.loadNacosNamespaces(node.connectionId, treeLoadSearchOptions);
       } else if (config?.db_type === "mqtt") {
         await connectionStore.loadMqttTopics(node.connectionId);
       } else {
-        await connectionStore.loadDatabases(node.connectionId);
+        await connectionStore.loadDatabases(node.connectionId, treeLoadSearchOptions);
       }
     } else if (node.type === "redis-db" && node.connectionId && node.database) {
       await connectionStore.ensureConnected(node.connectionId);
@@ -779,30 +784,30 @@ async function toggle() {
       }
     } else if (node.type === "database" && node.connectionId && hasTreeNodeDatabaseContext(node)) {
       if (node.catalog && node.catalog !== "internal") {
-        await connectionStore.loadDorisCatalogTables(node);
+        await connectionStore.loadDorisCatalogTables(node, treeLoadSearchOptions);
       } else {
         const config = connectionStore.getConfig(node.connectionId);
         const effectiveDbType = effectiveDatabaseTypeForConnection(config);
         if (config?.db_type === "sqlserver") {
-          await connectionStore.loadSqlServerDatabaseObjects(node.connectionId, node.database);
+          await connectionStore.loadSqlServerDatabaseObjects(node.connectionId, node.database, treeLoadSearchOptions);
         } else if (usesTreeSchemaMode(effectiveDbType) && !connectionUsesDatabaseObjectTreeMode(config)) {
-          await connectionStore.loadSchemas(node.connectionId, node.database);
+          await connectionStore.loadSchemas(node.connectionId, node.database, treeLoadSearchOptions);
         } else {
-          await connectionStore.loadTables(node.connectionId, node.database);
+          await connectionStore.loadTables(node.connectionId, node.database, undefined, treeLoadSearchOptions);
         }
       }
     } else if (node.type === "doris-catalog" && node.connectionId) {
-      await connectionStore.loadDorisCatalogDatabases(node);
+      await connectionStore.loadDorisCatalogDatabases(node, treeLoadSearchOptions);
     } else if (node.type === "schema" && node.connectionId && hasTreeNodeDatabaseContext(node) && node.schema) {
-      await connectionStore.loadTables(node.connectionId, node.database, node.schema);
+      await connectionStore.loadTables(node.connectionId, node.database, node.schema, treeLoadSearchOptions);
     } else if (node.type === "linked-server-root" && node.connectionId) {
-      await connectionStore.loadSqlServerLinkedServers(node.connectionId);
+      await connectionStore.loadSqlServerLinkedServers(node.connectionId, treeLoadSearchOptions);
     } else if (node.type === "linked-server" && node.connectionId) {
-      await connectionStore.loadSqlServerLinkedServerCatalogs(node);
+      await connectionStore.loadSqlServerLinkedServerCatalogs(node, treeLoadSearchOptions);
     } else if (node.type === "linked-server-catalog" && node.connectionId) {
-      await connectionStore.loadSqlServerLinkedServerSchemas(node);
+      await connectionStore.loadSqlServerLinkedServerSchemas(node, treeLoadSearchOptions);
     } else if (node.type === "linked-server-schema" && node.connectionId && hasTreeNodeDatabaseContext(node) && node.schema) {
-      await connectionStore.loadTables(node.connectionId, node.database, node.schema);
+      await connectionStore.loadTables(node.connectionId, node.database, node.schema, treeLoadSearchOptions);
     } else if ((node.type === "table" || node.type === "view" || node.type === "materialized_view") && node.connectionId && hasTreeNodeDatabaseContext(node)) {
       await connectionStore.loadTableGroups(node.connectionId, node.database, node.label, node.schema, node.id, node.catalog);
     } else if (node.type === "group-columns" && node.connectionId && hasTreeNodeDatabaseContext(node) && node.tableName) {
@@ -1534,7 +1539,7 @@ async function loadTemplateContext(allowView = false) {
 }
 
 function openSqlTemplateTab(connectionId: string, database: string, schema: string | undefined, catalog: string | undefined, sql: string, title?: string) {
-  const tabId = queryStore.createTab(connectionId, database, title, "query", schema, undefined, catalog);
+  const tabId = queryStore.createTab(connectionId, database, title, "query", schema, undefined, catalog, { forceWordWrap: true });
   queryStore.updateSql(tabId, sql);
 }
 
@@ -1681,6 +1686,35 @@ async function copyName() {
   } catch (e: any) {
     toast(t("grid.copyFailed", { message: e?.message || String(e) }), 5000);
   }
+}
+
+async function copyDisplayPath() {
+  const node = activeNode.value;
+  const connectionName = node.connectionId ? connectionStore.getConfig(node.connectionId)?.name || "" : "";
+  const path = copyDisplayPathForTreeNode(node, connectionName);
+  if (!path) return;
+  try {
+    await copyToClipboard(path);
+    toast(t("connection.copied"), 2000);
+  } catch (e: any) {
+    toast(t("grid.copyFailed", { message: e?.message || String(e) }), 5000);
+  }
+}
+
+function copyNameMenuItem(): ContextMenuItem {
+  const node = activeNode.value;
+  const connectionName = node.connectionId ? connectionStore.getConfig(node.connectionId)?.name || "" : "";
+  if (currentDatabaseType() === "mysql" && copyDisplayPathForTreeNode(node, connectionName)) {
+    return {
+      label: t("contextMenu.copyName"),
+      icon: Copy,
+      children: [
+        { label: t("contextMenu.name"), action: copyName, icon: Copy },
+        { label: t("contextMenu.fullPath"), action: copyDisplayPath, icon: Copy },
+      ],
+    };
+  }
+  return { label: t("contextMenu.copyName"), action: copyName, icon: Copy, shortcut: shortcutCopyName.value };
 }
 
 async function copyCustomTypeDdl() {
@@ -4494,7 +4528,7 @@ function buildDatabaseSidebarMenu(context: SidebarMenuFactoryContext): boolean {
       items.push({ label: t("contextMenu.closeDatabaseConnection"), action: closeDatabaseConnection, icon: Unplug });
       items.push({ label: "", separator: true });
     }
-    items.push({ label: t("contextMenu.copyName"), action: copyName, icon: Copy, shortcut: shortcutCopyName.value });
+    items.push(copyNameMenuItem());
     items.push({ label: "", separator: true });
     if (canOpenObjectBrowser.value) {
       items.push({ label: t("contextMenu.openObjectBrowser"), action: openObjectBrowser, icon: TableProperties });
@@ -4786,7 +4820,7 @@ function buildObjectSidebarMenu(context: SidebarMenuFactoryContext): boolean {
       return true;
     }
     const destructiveActions: ContextMenuItem[] = [];
-    items.push({ label: t("contextMenu.copyName"), action: copyName, icon: Copy, shortcut: shortcutCopyName.value });
+    items.push(copyNameMenuItem());
     items.push({ label: "", separator: true });
     items.push({ label: t("contextMenu.viewData"), action: openDataImmediately, icon: TableProperties });
     items.push({
@@ -4933,7 +4967,7 @@ function buildObjectSidebarMenu(context: SidebarMenuFactoryContext): boolean {
   }
 
   if (node.type === "index" || node.type === "fkey" || (node.type === "trigger" && !!node.tableName)) {
-    items.push({ label: t("contextMenu.copyName"), action: copyName, icon: Copy, shortcut: shortcutCopyName.value });
+    items.push(node.type === "trigger" ? copyNameMenuItem() : { label: t("contextMenu.copyName"), action: copyName, icon: Copy, shortcut: shortcutCopyName.value });
     if (currentDatabaseType() === "xugu" && buildXuguCompileSql({ objectType: node.type, schema: node.schema, name: node.objectName || node.label })) {
       items.push({ label: t("contextMenu.compileObject"), action: compileXuguObject, icon: Wrench });
     }
@@ -4973,6 +5007,9 @@ function buildObjectSidebarMenu(context: SidebarMenuFactoryContext): boolean {
       items.push({ label: t("contextMenu.compileObject"), action: compileXuguObject, icon: Wrench });
     }
     items.push({ label: t("contextMenu.viewSource"), action: () => openObjectSourceDialog(false), icon: Code2 });
+    if (currentDatabaseType() === "mysql") {
+      items.push(copyNameMenuItem());
+    }
     if (!isPackageMember && canRenameObject.value) {
       items.push({
         label: t("contextMenu.renameObject"),
@@ -5015,7 +5052,7 @@ function buildObjectSidebarMenu(context: SidebarMenuFactoryContext): boolean {
         icon: Code2,
       });
     }
-    items.push({ label: t("contextMenu.copyName"), action: copyName, icon: Copy, shortcut: shortcutCopyName.value });
+    items.push(node.type === "trigger" ? copyNameMenuItem() : { label: t("contextMenu.copyName"), action: copyName, icon: Copy, shortcut: shortcutCopyName.value });
     items.push({ label: t("contextMenu.changeOpenMode"), action: () => emit("open-settings", "navigation"), icon: Settings2 });
     return true;
   }
