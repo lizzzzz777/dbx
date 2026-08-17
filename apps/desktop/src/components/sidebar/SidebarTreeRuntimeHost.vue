@@ -101,7 +101,7 @@ import {
   usesTreeSchemaMode,
   isSingleDatabase,
 } from "@/lib/database/databaseCapabilities";
-import { copyDisplayPathForTreeNode, copyNameForTreeNode, isDirectNavigationTreeNode, isDocumentBrowserTreeNode, objectSourceTargetForTreeNode, shouldRunTreeNodeRowAction, treeNodeRowAction, treeNodeRowDoubleClickAction } from "@/lib/sidebar/treeNodeClick";
+import { copyDisplayPathForTreeNode, copyNameForTreeNode, isDirectNavigationTreeNode, isDocumentBrowserTreeNode, isRepeatableNavigationTreeNode, objectSourceTargetForTreeNode, shouldRunTreeNodeRowAction, treeNodeRowAction, treeNodeRowDoubleClickAction } from "@/lib/sidebar/treeNodeClick";
 import { customTypeCapabilities, supportsTypeObjectSource } from "@/lib/database/databaseObjectCapabilities";
 import { mongoCollectionTableTypeFromNode, mongoDropIndexFailureCount } from "@/lib/sidebar/mongoCollectionMutation";
 import { dataTabOpenModeFromTreeClick, type DataTabOpenMode } from "@/lib/sidebar/dataTabOpenPolicy";
@@ -280,6 +280,7 @@ import {
   schemaCommentLoading,
   schemaCommentPreviewSql,
   showDeleteGroupConfirm,
+  deleteConnectionsWithGroup,
   showMoveToNewGroupDialog,
   moveToNewGroupName,
   type DuplicateStructureSource,
@@ -313,6 +314,16 @@ const props = defineProps<{
 
 const activeNode = shallowRef<TreeNode>(props.node);
 let acceptedSelectionIds: readonly string[] | null = null;
+let latestNavigationRequestId = 0;
+
+function beginNavigationRequest(): number {
+  latestNavigationRequestId += 1;
+  return latestNavigationRequestId;
+}
+
+function isCurrentNavigationRequest(requestId: number): boolean {
+  return requestId === latestNavigationRequestId;
+}
 
 function releaseActiveNodeReference(nodeIds: readonly string[]) {
   activeNode.value = releaseRemovedSidebarActionTarget(activeNode.value, nodeIds);
@@ -344,7 +355,6 @@ const { openAllDatabasesExport, openDataCompare, openDatabaseExport, openDatabas
 
 const emit = defineEmits<{
   "rename-started": [];
-  "group-created": [groupId: string];
   "request-group-rename": [groupId: string];
   "request-saved-sql-rename": [nodeId: string];
   "node-toggled": [node: TreeNode, expanded: boolean];
@@ -385,6 +395,8 @@ const {
   disconnectConnection,
   connectionDisconnectMenuLabel,
   canDisconnectConnection,
+  canForgetSessionCredential,
+  disconnectAndForgetConnectionPassword,
   cancelConnectionAttempt,
   closeDatabaseConnection,
   isPinned,
@@ -400,10 +412,13 @@ const {
   openVisibleDatabasesDialog,
   openVisibleSchemasDialog,
   startRenameGroup,
+  connectionGroupDeleteMenuLabel,
+  connectionGroupDeleteConfirmMessage,
   deleteConnectionGroup,
   newConnectionInGroup,
   newSubgroup,
   confirmDeleteGroup,
+  deletingConnectionGroups,
   moveToGroup,
   createGroupAndMoveConnection,
 } = useSidebarConnectionMutationRuntime({
@@ -413,7 +428,6 @@ const {
   connectionStore,
   queryStore,
   requestGroupRename: (groupId) => emit("request-group-rename", groupId),
-  groupCreated: (groupId) => emit("group-created", groupId),
   openVisibleDatabases: (node) => emit("open-visible-databases", node),
   openVisibleSchemas: (node) => emit("open-visible-schemas", node),
 });
@@ -597,25 +611,32 @@ function isGroupLabel(node: TreeNode): boolean {
   return groupTypes.has(node.type);
 }
 
-async function openDirectNavigationNode(node: TreeNode) {
+async function openDirectNavigationNode(node: TreeNode, requestId: number) {
   if (!node.connectionId) return;
-  await connectionStore.ensureConnected(node.connectionId);
-  const connectionName = connectionStore.getConfig(node.connectionId)?.name || "Consul";
+  const isNacosNavigation = node.type === "nacos-namespace" || node.type === "nacos-access-control";
+  await connectionStore.ensureConnected(node.connectionId, isNacosNavigation ? { verifyHealth: false } : undefined);
+  if (!isCurrentNavigationRequest(requestId)) return;
+  const connectionName = connectionStore.getConfig(node.connectionId)?.name || (isNacosNavigation ? "Nacos" : "Consul");
   if (node.type === "consul-root") {
     queryStore.createTab(node.connectionId, "", `${connectionName}:keys`, "consul");
     refreshActiveKvBrowserAfterOpen("consul", node.connectionId);
   } else if (node.type === "consul-overview") {
     queryStore.createTab(node.connectionId, "", `${connectionName}:${t("consul.ui.overview")}`, "consul-overview");
+  } else if (node.type === "nacos-namespace") {
+    queryStore.openNacosAdmin(node.connectionId, { namespace: node.nacosNamespace || "", namespaceName: node.nacosNamespaceName || node.label });
+  } else if (node.type === "nacos-access-control") {
+    queryStore.createTab(node.connectionId, "", `${connectionName}:access-control`, "nacos-access-control");
   }
 }
 
-async function toggle() {
+async function toggle(requestId = beginNavigationRequest()) {
   const node = activeNode.value;
   const treeLoadSearchOptions = sidebarTreeContext?.getTreeLoadSearchOptions?.(node);
   if (isDirectNavigationTreeNode(node.type)) {
     try {
-      await openDirectNavigationNode(node);
+      await openDirectNavigationNode(node, requestId);
     } catch (e: any) {
+      if (!isCurrentNavigationRequest(requestId)) return;
       const errMsg = e?.message || String(e);
       if (errMsg.includes(CONNECTION_ATTEMPT_CANCELLED_MESSAGE)) return;
       toast(t("connection.connectFailed", { message: translateBackendError(t, e) }), 5000);
@@ -733,6 +754,8 @@ async function toggle() {
         await connectionStore.loadConsulRoot(node.connectionId);
       } else if (config?.db_type === "mongodb") {
         await connectionStore.loadMongoDatabases(node.connectionId);
+      } else if (config?.db_type === "dynamodb") {
+        await connectionStore.loadDynamoDbTables(node.connectionId);
       } else if (config?.db_type === "elasticsearch" || config?.db_type === "easysearch" || config?.db_type === "meilisearch") {
         // Expand: list indices (like other db types list databases).
         await connectionStore.loadElasticsearchIndices(node.connectionId);
@@ -762,9 +785,6 @@ async function toggle() {
       await connectionStore.ensureConnected(node.connectionId);
       const topicFromId = node.id.endsWith(":mqtt-topic:__console__") ? undefined : node.id.split(":mqtt-topic:")[1] || node.label;
       queryStore.openMqttAdmin(node.connectionId, topicFromId ? { initialTopic: topicFromId } : undefined);
-    } else if (node.type === "nacos-namespace" && node.connectionId) {
-      await connectionStore.ensureConnected(node.connectionId);
-      queryStore.openNacosAdmin(node.connectionId, { namespace: node.nacosNamespace || "", namespaceName: node.nacosNamespaceName || node.label });
     } else if (node.type === "etcd-root" && node.connectionId) {
       await connectionStore.ensureConnected(node.connectionId);
       const tabTitle = `${connectionStore.getConfig(node.connectionId)?.name || "etcd"}:keys`;
@@ -870,6 +890,7 @@ async function toggle() {
     }
     emitNodeToggled(node, wasExpanded);
   } catch (e: any) {
+    if (!isCurrentNavigationRequest(requestId)) return;
     if (!wasExpanded) node.isExpanded = false;
     const errMsg = e?.message || String(e);
     if (errMsg.includes(CONNECTION_ATTEMPT_CANCELLED_MESSAGE)) return;
@@ -878,7 +899,7 @@ async function toggle() {
   }
 }
 
-function runRowClickAction(clickDetail: number) {
+function runRowClickAction(clickDetail: number, requestId: number) {
   const node = activeNode.value;
   if (node.type === "load-more") {
     if (clickDetail > 1) return;
@@ -895,7 +916,10 @@ function runRowClickAction(clickDetail: number) {
     return;
   }
   const action = treeNodeRowAction(node.type, canExpand.value, settingsStore.editorSettings.sidebarActivation, currentDatabaseType(), settingsStore.editorSettings.sidebarOpenDatabaseOnSingleClick, canOpenObjectBrowser.value);
-  if (!shouldRunTreeNodeRowAction(action, clickDetail, isGroupLabel(node))) return;
+  // WebKit can keep incrementing click.detail while the pointer moves quickly
+  // between adjacent rows. Nacos entries are idempotent navigation targets, so
+  // do not mistake that rapid one-click switching for a double-click toggle.
+  if (!shouldRunTreeNodeRowAction(action, clickDetail, isGroupLabel(node) || isRepeatableNavigationTreeNode(node.type))) return;
   if (action === "open-data") {
     scheduleOpenData(node);
   } else if (action === "open-object-browser") {
@@ -912,7 +936,7 @@ function runRowClickAction(clickDetail: number) {
   } else if (isDocumentBrowserTreeNode(node.type)) {
     openMongoTreeData(node);
   } else if (action === "toggle") {
-    toggle();
+    void toggle(requestId);
   }
 }
 
@@ -1295,6 +1319,18 @@ function openMongoTreeData(node: TreeNode) {
   const tabTitle = `${node.database}.${node.label}`;
   if (node.type === "mongo-bucket") {
     queryStore.openMongoBucket(node.connectionId, node.database, node.label);
+    return;
+  }
+  if (node.type === "dynamodb-table") {
+    const tab = queryStore.createTab(node.connectionId, node.database, `${node.database}.${node.label}`, "mongo");
+    queryStore.updateSql(tab, node.label);
+    queryStore.setTableMeta(tab, {
+      database: node.database,
+      tableName: node.label,
+      tableType: "DYNAMODB TABLE",
+      columns: [],
+      primaryKeys: [],
+    });
     return;
   }
   if (node.type !== "mongo-collection") return;
@@ -3745,7 +3781,7 @@ const canOpenSqlFileExecution = computed(() => {
 const canExportAllDatabases = computed(() => {
   if (activeNode.value.type !== "connection" || !activeNode.value.connectionId) return false;
   const dbType = connectionStore.getConfig(activeNode.value.connectionId)?.db_type;
-  return !["redis", "mongodb", "elasticsearch", "easysearch", "meilisearch", "qdrant", "milvus", "weaviate", "chromadb", "etcd", "zookeeper", "consul", "mq", "nacos"].includes(dbType || "");
+  return !["redis", "mongodb", "dynamodb", "elasticsearch", "easysearch", "meilisearch", "qdrant", "milvus", "weaviate", "chromadb", "etcd", "zookeeper", "consul", "mq", "nacos"].includes(dbType || "");
 });
 
 const canOpenDiagram = computed(() => {
@@ -4130,6 +4166,10 @@ function connectionDialogCapabilities() {
     moveToNewGroupName,
     confirmMoveToNewGroup,
     showDeleteGroupConfirm,
+    deleteConnectionsWithGroup,
+    connectionGroupDeleteConfirmMessage,
+    connectionGroupDeleteMenuLabel,
+    deletingConnectionGroups,
     confirmDeleteGroup,
   };
 }
@@ -4352,6 +4392,7 @@ function moreActionsSubmenu(children: ContextMenuItem[]): ContextMenuItem {
   return {
     label: t("common.more"),
     icon: ListTree,
+    variant: "destructive",
     children,
   };
 }
@@ -4432,6 +4473,15 @@ function buildConnectionSidebarMenu(context: SidebarMenuFactoryContext): boolean
       items.push({ label: t("connection.cancelConnecting"), action: cancelConnectionAttempt, icon: X });
     } else if (canDisconnectConnection()) {
       items.push({ label: connectionDisconnectMenuLabel(), action: disconnectConnection, icon: Unplug });
+      // save_password=false 且本次运行期已输入密码：提供"断开并忘记本次密码"，
+      // 清除会话凭据后下次连接需重新输入。
+      if (canForgetSessionCredential()) {
+        items.push({
+          label: t("connection.disconnectAndForgetPassword"),
+          action: disconnectAndForgetConnectionPassword,
+          icon: Unplug,
+        });
+      }
     } else if (!isConnected.value) {
       items.push({ label: t("contextMenu.openConnection"), action: toggle, icon: Plug });
     }
@@ -4580,7 +4630,7 @@ function buildConnectionSidebarMenu(context: SidebarMenuFactoryContext): boolean
     });
     items.push({ label: "", separator: true });
     items.push({
-      label: t("connectionGroup.deleteGroup"),
+      label: connectionGroupDeleteMenuLabel(),
       action: deleteConnectionGroup,
       icon: Trash2,
       shortcut: shortcutDelete,
@@ -4621,8 +4671,8 @@ function buildDatabaseSidebarMenu(context: SidebarMenuFactoryContext): boolean {
       return true;
     }
     if (canCloseDatabaseConnection.value) {
-      items.push({ label: t("contextMenu.closeDatabaseConnection"), action: closeDatabaseConnection, icon: Unplug });
-      items.push({ label: "", separator: true });
+      items.unshift({ label: "", separator: true });
+      items.unshift({ label: t("contextMenu.closeDatabaseConnection"), action: closeDatabaseConnection, icon: Unplug });
     }
     items.push(copyNameMenuItem());
     items.push({ label: "", separator: true });
@@ -4799,7 +4849,7 @@ function buildSpecialSidebarMenu(context: SidebarMenuFactoryContext): boolean {
     return true;
   }
 
-  if (node.type === "etcd-root" || node.type === "etcd-dashboard" || node.type === "etcd-access-control" || node.type === "zookeeper-root" || node.type === "consul-root" || node.type === "consul-overview") {
+  if (node.type === "nacos-access-control" || node.type === "etcd-root" || node.type === "etcd-dashboard" || node.type === "etcd-access-control" || node.type === "zookeeper-root" || node.type === "consul-root" || node.type === "consul-overview") {
     items.push({ label: t("contextMenu.openConnection"), action: toggle, icon: Database });
     return true;
   }
@@ -4856,6 +4906,13 @@ function buildSpecialSidebarMenu(context: SidebarMenuFactoryContext): boolean {
     });
     items.push({ label: "", separator: true });
     items.push({ label: t("contextMenu.copyName"), action: copyName, icon: Copy, shortcut: shortcutCopyName.value });
+    return true;
+  }
+
+  if (node.type === "dynamodb-table") {
+    items.push({ label: t("contextMenu.copyName"), action: copyName, icon: Copy, shortcut: shortcutCopyName.value });
+    items.push({ label: "", separator: true });
+    items.push({ label: t("contextMenu.viewData"), action: toggle, icon: TableProperties });
     return true;
   }
 
@@ -5207,7 +5264,7 @@ function buildObjectGroupSidebarMenu(context: SidebarMenuFactoryContext): boolea
     const hasMongoCreateIndexAction = node.type === "group-indexes" && canCreateMongoIndex.value;
     const hasMongoDropAllIndexesAction = node.type === "group-indexes" && canDropAllMongoIndexes.value;
     const hasGroupAction = (node.type === "group-tables" && canCreateTable.value) || (node.type === "group-views" && !!node.connectionId && !!node.database) || !!mysqlObjectTemplate || hasMongoCreateIndexAction || hasMongoDropAllIndexesAction;
-    const canLoadAllObjectGroup = node.type === "group-tables" || node.type === "group-views" || node.type === "group-materialized-views";
+    const canLoadAllObjectGroup = node.type === "group-tables" || node.type === "group-dolt-system-tables" || node.type === "group-views" || node.type === "group-materialized-views";
     if (node.type === "group-tables" && canCreateTable.value) {
       items.push({ label: t("contextMenu.createTable"), action: createTable, icon: Plus });
       if (canOpenTableImport.value) {
@@ -5386,16 +5443,19 @@ function buildContextMenu(node: TreeNode): ContextMenuItem[] {
 }
 
 function handleRowClick(node: TreeNode, clickDetail: number) {
+  const requestId = beginNavigationRequest();
   activateRuntimeNode(node);
-  runRowClickAction(clickDetail);
+  runRowClickAction(clickDetail, requestId);
 }
 
 function handleRowDoubleClick(node: TreeNode, event: MouseEvent) {
+  beginNavigationRequest();
   activateRuntimeNode(node);
   onDoubleClick(event);
 }
 
 function handleRowKeydown(node: TreeNode, event: KeyboardEvent) {
+  beginNavigationRequest();
   activateRuntimeNode(node);
   onKeydown(event);
 }
@@ -5427,7 +5487,7 @@ function requestPaste(node: TreeNode): boolean {
 
 function toggleNode(node: TreeNode) {
   activateRuntimeNode(node);
-  void toggle();
+  void toggle(beginNavigationRequest());
 }
 
 defineExpose({

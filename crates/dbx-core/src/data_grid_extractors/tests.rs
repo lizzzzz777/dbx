@@ -43,6 +43,7 @@ fn partially_deserialized_options_use_the_canonical_defaults() {
     assert_eq!(options.sql.insert_mode, crate::data_grid_sql::DataGridCopyInsertMode::Merged);
     assert!(!options.sql.exclude_primary_keys_from_insert);
     assert!(options.json.pretty);
+    assert!(!options.json.camel_case_field_names);
 }
 
 #[test]
@@ -348,6 +349,105 @@ fn extracts_compact_json_when_pretty_printing_is_disabled() {
     let result = extract_data_grid_selection(request).expect("compact JSON extraction");
 
     assert_eq!(result.text, "[{\"id\":1,\"name\":\"Ada\"},{\"id\":2,\"name\":\"Grace, Hopper\"}]");
+}
+
+#[test]
+fn converts_snake_case_json_field_names_only_when_enabled() {
+    let mut request = request(DataGridExtractorId::Json);
+    request.columns = vec![
+        column("ID", 0),
+        column("CODE", 1),
+        column("NAME", 2),
+        column("CREATE_TIME", 3),
+        column("user_id", 4),
+        column("ORDER_ITEM_ID", 5),
+        column("alreadyCamel", 6),
+        column("_display__name_", 7),
+        column("naïve_value", 8),
+    ];
+    request.selected_column_indexes = vec![0, 1, 2, 3, 4, 5, 6, 7, 8];
+    request.rows = vec![vec![
+        json!(1),
+        json!("A01"),
+        json!("Ada"),
+        json!("2026-08-16T08:52:23Z"),
+        json!(7),
+        json!(9),
+        json!("kept"),
+        json!("Ada"),
+        json!(true),
+    ]];
+
+    let unchanged = extract_data_grid_selection(request.clone()).expect("default JSON extraction");
+    assert_eq!(
+        serde_json::from_str::<Value>(&unchanged.text).expect("valid default JSON"),
+        json!([{
+            "ID": 1,
+            "CODE": "A01",
+            "NAME": "Ada",
+            "CREATE_TIME": "2026-08-16T08:52:23Z",
+            "user_id": 7,
+            "ORDER_ITEM_ID": 9,
+            "alreadyCamel": "kept",
+            "_display__name_": "Ada",
+            "naïve_value": true
+        }])
+    );
+
+    request.options.json.camel_case_field_names = true;
+    let converted = extract_data_grid_selection(request).expect("camel-case JSON extraction");
+    assert_eq!(
+        serde_json::from_str::<Value>(&converted.text).expect("valid converted JSON"),
+        json!([{
+            "id": 1,
+            "code": "A01",
+            "name": "Ada",
+            "createTime": "2026-08-16T08:52:23Z",
+            "userId": 7,
+            "orderItemId": 9,
+            "alreadyCamel": "kept",
+            "displayName": "Ada",
+            "naïveValue": true
+        }])
+    );
+}
+
+#[test]
+fn converts_json_lines_names_and_suffixes_post_conversion_collisions() {
+    let mut request = request(DataGridExtractorId::JsonLines);
+    request.columns = vec![column("user_id", 0), column("userId", 1), column("___", 2)];
+    request.selected_column_indexes = vec![0, 1, 2];
+    request.rows = vec![vec![json!(1), json!(2), json!(3)], vec![json!(4), json!(5), json!(6)]];
+    request.options.json.camel_case_field_names = true;
+
+    let result = extract_data_grid_selection(request).expect("camel-case JSON Lines extraction");
+    let rows = result
+        .text
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("valid JSON Lines record"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        rows,
+        vec![json!({"userId": 1, "userId_2": 2, "___": 3}), json!({"userId": 4, "userId_2": 5, "___": 6})]
+    );
+    assert_eq!(result.warnings.len(), 1);
+    assert_eq!(result.warnings[0].code, DataGridExtractWarningCode::DuplicateJsonColumnNames);
+}
+
+#[test]
+fn suffixes_collisions_after_normalizing_uppercase_json_names() {
+    let mut request = request(DataGridExtractorId::Json);
+    request.columns = vec![column("ID", 0), column("id", 1)];
+    request.selected_column_indexes = vec![0, 1];
+    request.rows = vec![vec![json!(1), json!(2)]];
+    request.options.json.camel_case_field_names = true;
+
+    let result = extract_data_grid_selection(request).expect("normalized JSON extraction");
+
+    assert_eq!(serde_json::from_str::<Value>(&result.text).expect("valid JSON"), json!([{"id": 1, "id_2": 2}]));
+    assert_eq!(result.warnings.len(), 1);
+    assert_eq!(result.warnings[0].code, DataGridExtractWarningCode::DuplicateJsonColumnNames);
 }
 
 #[test]
@@ -704,6 +804,7 @@ fn extractor_contract_uses_the_frontend_camel_case_wire_shape() {
     assert_eq!(value["selectedColumnIndexes"], json!([0, 1]));
     assert_eq!(value["selectionKind"], "cells");
     assert_eq!(value["options"]["dsv"]["includeColumnHeader"], false);
+    assert_eq!(value["options"]["json"]["camelCaseFieldNames"], false);
     assert!(value.get("selected_column_indexes").is_none());
 
     let decoded = serde_json::from_value::<DataGridExtractRequest>(value).expect("deserialize extractor request");

@@ -613,6 +613,14 @@ export async function saveSavedSqlEditorPositions(positions: unknown[]): Promise
   return invoke("save_saved_sql_editor_positions", { positions });
 }
 
+export async function loadTransferTaskLibrary(): Promise<unknown | null> {
+  return invoke("load_transfer_task_library");
+}
+
+export async function saveTransferTaskLibrary(library: unknown): Promise<void> {
+  return invoke("save_transfer_task_library", { library });
+}
+
 export async function completeAppClose(action: "quit" | "hide"): Promise<void> {
   return invoke("complete_app_close", { action });
 }
@@ -914,6 +922,14 @@ export async function connectionFinalProxyPort(config: ConnectionConfig): Promis
 
 export async function disconnectDb(connectionId: string, clientAttempt?: number): Promise<void> {
   return invokeBackend("disconnect_db", { connectionId, clientAttempt });
+}
+
+export async function sessionCredentialStatus(connectionId: string): Promise<boolean> {
+  return invokeBackend("session_credential_status", { connectionId });
+}
+
+export async function forgetSessionCredential(connectionId: string): Promise<void> {
+  return invokeBackend("forget_session_credential", { connectionId });
 }
 
 export async function checkConnectionHealth(connectionId: string): Promise<void> {
@@ -1638,7 +1654,7 @@ export async function listSubpartitions(connectionId: string, database: string, 
   });
 }
 
-export async function getTableDdl(connectionId: string, database: string, schema: string, table: string, objectType?: ObjectSourceKind, catalog?: string): Promise<string> {
+export async function getTableDdl(connectionId: string, database: string, schema: string, table: string, objectType?: ObjectSourceKind, catalog?: string, portable = false): Promise<string> {
   return invoke("get_table_ddl", {
     connectionId,
     database,
@@ -1646,6 +1662,7 @@ export async function getTableDdl(connectionId: string, database: string, schema
     table,
     objectType,
     catalog,
+    portable,
   });
 }
 
@@ -1658,6 +1675,7 @@ export async function getTableDisplayDdl(connectionId: string, database: string,
     objectType,
     catalog,
     includePostgresAccess: true,
+    portable: false,
   });
 }
 
@@ -1926,6 +1944,10 @@ export async function loadSavedSqlLibrary(): Promise<SavedSqlLibrary> {
   return invoke("load_saved_sql_library");
 }
 
+export async function loadSavedSqlFilesForSync(): Promise<SavedSqlFile[]> {
+  return invoke("load_saved_sql_files_for_sync");
+}
+
 export async function loadSavedSqlFile(id: string): Promise<SavedSqlFile | null> {
   return invoke("load_saved_sql_file", { id });
 }
@@ -2015,6 +2037,7 @@ export interface McpServerStatus {
   data_dir: string | null;
   install_command: string;
   update_command: string;
+  uninstall_command: string;
   error: string | null;
 }
 
@@ -2024,6 +2047,10 @@ export async function checkMcpServerStatus(): Promise<McpServerStatus> {
 
 export async function installMcpServer(): Promise<string> {
   return invoke("install_mcp_server");
+}
+
+export async function uninstallMcpServer(): Promise<string> {
+  return invoke("uninstall_mcp_server");
 }
 
 export async function checkForUpdates(locale?: string, source?: UpdateDownloadSource): Promise<UpdateInfo> {
@@ -3261,6 +3288,31 @@ export interface DocumentQueryResult {
   extended_documents?: any[];
   total: number;
   total_is_exact?: boolean;
+  next_cursor?: string;
+}
+
+export interface DynamoDbKeyInfo {
+  name: string;
+  attributeType: "S" | "N" | "B" | string;
+}
+
+export interface DynamoDbIndexInfo {
+  name: string;
+  kind: "global" | "local" | string;
+  partitionKey: DynamoDbKeyInfo;
+  sortKey?: DynamoDbKeyInfo;
+  projectionType: "ALL" | "KEYS_ONLY" | "INCLUDE" | string;
+  nonKeyAttributes: string[];
+}
+
+export interface DynamoDbTableDescription {
+  name: string;
+  status: string;
+  itemCount: number;
+  sizeBytes: number;
+  partitionKey: DynamoDbKeyInfo;
+  sortKey?: DynamoDbKeyInfo;
+  indexes: DynamoDbIndexInfo[];
 }
 
 // Kept for callers that are specifically using MongoDB APIs.
@@ -3423,7 +3475,7 @@ export async function mongoParseShellCommand(source: string): Promise<MongoComma
   return normalizeRustMongoCommand(raw);
 }
 
-export async function documentFindDocuments(connectionId: string, database: string, collection: string, skip: number, limit: number, filter?: string, projection?: string, sort?: string, collation?: string, executionId?: string): Promise<DocumentQueryResult> {
+export async function documentFindDocuments(connectionId: string, database: string, collection: string, skip: number, limit: number, filter?: string, projection?: string, sort?: string, collation?: string, executionId?: string, cursor?: string): Promise<DocumentQueryResult> {
   return invoke("document_find_documents", {
     connectionId,
     database,
@@ -3434,8 +3486,22 @@ export async function documentFindDocuments(connectionId: string, database: stri
     projection,
     sort,
     collation,
+    cursor,
     executionId,
   });
+}
+
+export async function documentCountDocuments(connectionId: string, collection: string, filter?: string, executionId?: string): Promise<number> {
+  return invoke("document_count_documents", {
+    connectionId,
+    collection,
+    filter,
+    executionId,
+  });
+}
+
+export async function dynamodbDescribeTable(connectionId: string, table: string): Promise<DynamoDbTableDescription> {
+  return invoke("dynamodb_describe_table", { connectionId, table });
 }
 
 export async function elasticsearchCountDocuments(connectionId: string, index: string, filter?: string, executionId?: string): Promise<number> {
@@ -4339,6 +4405,10 @@ export async function exportDatabaseSql(request: DatabaseExportRequest, onProgre
 
 export async function cancelDatabaseExport(exportId: string): Promise<void> {
   await invoke("cancel_database_export", { exportId });
+}
+
+export async function recordDatabaseExportDestination(directory: string): Promise<void> {
+  await invoke("record_database_export_destination", { directory });
 }
 
 export async function exportQueryResultCsv(filePath: string, columns: string[], rows: readonly (readonly XlsxCellValue[])[]): Promise<void> {
