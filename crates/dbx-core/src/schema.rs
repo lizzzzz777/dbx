@@ -6498,9 +6498,10 @@ pub async fn list_owners_core(
 /// Whether to widen or normalize a single-table DDL fetch for its caller.
 ///
 /// Database export and table transfer render one relation at a time because
-/// they already iterate every relation themselves. Interactive display paths
-/// include PostgreSQL access statements and recurse through the partition
-/// tree. Oracle export additionally requests portable DDL normalization.
+/// they already iterate every relation themselves. A selected table structure
+/// export and interactive display both recurse through the PostgreSQL
+/// partition tree, while only display includes access statements. Oracle
+/// exports additionally request portable DDL normalization.
 #[derive(Clone, Copy)]
 struct TableDdlOptions {
     include_postgres_access: bool,
@@ -6511,7 +6512,9 @@ struct TableDdlOptions {
 impl TableDdlOptions {
     const SINGLE_RELATION: Self =
         Self { include_postgres_access: false, include_partitions: false, portable_oracle: false };
-    const EXPORT: Self = Self { include_postgres_access: false, include_partitions: false, portable_oracle: true };
+    const RELATION_EXPORT: Self =
+        Self { include_postgres_access: false, include_partitions: false, portable_oracle: true };
+    const EXPORT: Self = Self { include_postgres_access: false, include_partitions: true, portable_oracle: true };
     const DISPLAY: Self = Self { include_postgres_access: true, include_partitions: true, portable_oracle: false };
 }
 
@@ -6545,6 +6548,26 @@ pub async fn get_table_export_ddl_core(
 ) -> Result<String, String> {
     get_table_ddl_core_with_options(state, connection_id, database, schema, table, object_type, TableDdlOptions::EXPORT)
         .await
+}
+
+pub(crate) async fn get_table_relation_export_ddl_core(
+    state: &AppState,
+    connection_id: &str,
+    database: &str,
+    schema: &str,
+    table: &str,
+    object_type: Option<db::ObjectSourceKind>,
+) -> Result<String, String> {
+    get_table_ddl_core_with_options(
+        state,
+        connection_id,
+        database,
+        schema,
+        table,
+        object_type,
+        TableDdlOptions::RELATION_EXPORT,
+    )
+    .await
 }
 
 pub async fn get_table_display_ddl_core(
@@ -8521,6 +8544,21 @@ mod ddl_tests {
     }
 
     #[test]
+    fn table_structure_export_includes_partition_tree() {
+        assert!(TableDdlOptions::EXPORT.include_partitions);
+        assert!(TableDdlOptions::EXPORT.portable_oracle);
+        assert!(!TableDdlOptions::EXPORT.include_postgres_access);
+
+        assert!(!TableDdlOptions::RELATION_EXPORT.include_partitions);
+        assert!(TableDdlOptions::RELATION_EXPORT.portable_oracle);
+        assert!(!TableDdlOptions::RELATION_EXPORT.include_postgres_access);
+
+        assert!(TableDdlOptions::DISPLAY.include_partitions);
+        assert!(!TableDdlOptions::DISPLAY.portable_oracle);
+        assert!(TableDdlOptions::DISPLAY.include_postgres_access);
+    }
+
+    #[test]
     fn postgres_table_ddl_includes_column_comments() {
         let mut display_name = column("display_name", "text");
         display_name.comment = Some("User's display name".to_string());
@@ -9566,8 +9604,8 @@ pub async fn pg_ddl(pool: &deadpool_postgres::Pool, schema: &str, table: &str) -
 }
 
 /// Like `pg_ddl`, but for a partitioned table also emits `CREATE TABLE ...
-/// PARTITION OF` for every existing partition, at any depth. Used only by the
-/// interactive "view DDL" paths (`get_table_display_ddl_core`) — callers that
+/// PARTITION OF` for every existing partition, at any depth. Used by selected
+/// table structure exports and interactive "view DDL" paths — callers that
 /// iterate relations themselves must use `pg_ddl` instead (see its doc
 /// comment). Fetches the whole tree's metadata via a handful of batched,
 /// tree-wide queries (see `db::postgres::fetch_postgres_partition_tree` and

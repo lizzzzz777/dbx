@@ -188,6 +188,55 @@ fn extracts_multi_column_sql_in_as_row_value_tuples() {
 }
 
 #[test]
+fn sql_in_list_deduplicates_single_selected_values() {
+    let mut request = request(DataGridExtractorId::SqlInList);
+    request.selected_column_indexes = vec![0];
+    request.rows = vec![
+        vec![json!(1), json!("first")],
+        vec![json!(1), json!("unselected value differs")],
+        vec![json!(2), json!("last")],
+    ];
+
+    let result = extract_data_grid_selection(request).expect("SQL IN extraction");
+
+    assert_eq!(result.text, "(1, 2)");
+}
+
+#[test]
+fn sql_in_list_deduplicates_multi_column_tuples_in_first_seen_order() {
+    let mut request = request(DataGridExtractorId::SqlInList);
+    request.rows = vec![
+        vec![json!(2), json!("Grace")],
+        vec![json!(1), json!("Ada")],
+        vec![json!(2), json!("Grace")],
+        vec![json!(1), json!("Lovelace")],
+        vec![json!(1), json!("Ada")],
+    ];
+
+    let result = extract_data_grid_selection(request).expect("SQL IN extraction");
+
+    assert_eq!(result.text, "((2, 'Grace'), (1, 'Ada'), (1, 'Lovelace'))");
+}
+
+#[test]
+fn sql_in_list_deduplicates_only_identical_rendered_literals() {
+    let mut request = request(DataGridExtractorId::SqlInList);
+    request.selected_column_indexes = vec![0];
+    request.rows = vec![
+        vec![json!(1)],
+        vec![json!("1")],
+        vec![Value::Null],
+        vec![Value::Null],
+        vec![json!("O'Reilly")],
+        vec![json!("O'Reilly")],
+    ];
+
+    let result = extract_data_grid_selection(request).expect("SQL IN extraction");
+
+    assert_eq!(result.text, "(1, '1', NULL, 'O''Reilly')");
+}
+
+#[test]
 fn preserves_duplicate_json_columns_without_overwriting_values() {
     let mut request = request(DataGridExtractorId::Json);
     request.columns[1].display_name = "id".to_string();
