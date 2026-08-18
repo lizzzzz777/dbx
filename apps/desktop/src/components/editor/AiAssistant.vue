@@ -2934,21 +2934,15 @@ async function openExternalUrl(url: string) {
                     <input v-model="modelSearchQuery" type="text" :placeholder="t('ai.searchModels')" class="w-full rounded-sm border bg-background py-1.5 pl-7 pr-2 text-xs outline-none focus:ring-1 focus:ring-primary" @click.stop />
                   </div>
                   <div class="max-h-80 overflow-auto">
-                    <template v-for="config in configuredProviders" :key="config.id">
-                      <button
-                        type="button"
-                        class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
-                        :class="config.id === settings.activeModel?.configId ? 'bg-accent text-accent-foreground' : 'text-foreground'"
-                        :aria-expanded="!isModelConfigCollapsed(config.id)"
-                        @click="toggleModelConfig(config.id)"
-                      >
+                    <template v-for="(config, configIndex) in configuredProviders" :key="config.id">
+                      <button type="button" class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-foreground hover:bg-muted" :aria-expanded="!isModelConfigCollapsed(config.id)" @click="toggleModelConfig(config.id)">
                         <ChevronRight class="h-3.5 w-3.5 shrink-0 transition-transform" :class="{ 'rotate-90': !isModelConfigCollapsed(config.id) }" />
                         <AiProviderLogo :provider="config.provider" :label="AI_PROVIDER_PRESETS[config.provider]?.label ?? config.provider" :icon-slug="AI_PROVIDER_PRESETS[config.provider]?.iconSlug" class="h-3.5 w-3.5 shrink-0" />
                         <span class="min-w-0 flex-1 truncate font-medium">{{ config.name }}</span>
                         <Loader2 v-if="getModelCatalog(config.id).status === 'loading'" class="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
                         <span v-if="config.isDefault" class="ml-auto text-[10px] text-muted-foreground">{{ t("ai.default") }}</span>
                       </button>
-                      <div v-if="!isModelConfigCollapsed(config.id)">
+                      <div v-if="!isModelConfigCollapsed(config.id)" class="ml-5 border-l border-border/60 pl-1">
                         <div v-if="getModelCatalog(config.id).status === 'loading' && !getModelsForConfig(config.id).length" class="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground">
                           <Loader2 class="h-3.5 w-3.5 animate-spin" />
                           {{ t("ai.loadingModels") }}
@@ -2989,7 +2983,7 @@ async function openExternalUrl(url: string) {
                           {{ t("ai.manualModel") }}
                         </button>
                       </div>
-                      <div class="my-1 border-t" />
+                      <div v-if="configIndex < configuredProviders.length - 1" class="my-1 border-t" />
                     </template>
                   </div>
                   <div v-if="settings.activeModel" class="border-t pt-1">
