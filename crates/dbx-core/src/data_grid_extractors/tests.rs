@@ -247,6 +247,53 @@ fn builds_updates_with_hidden_primary_keys_and_selected_columns() {
 }
 
 #[test]
+fn sql_copy_honors_kingbase_mysql_compat_connection_identifier_quote() {
+    let table_meta = DataGridTableMeta {
+        catalog: None,
+        database: None,
+        schema: Some("audit-schema".to_string()),
+        table_name: "events".to_string(),
+        primary_keys: vec!["id".to_string()],
+        columns: Some(vec![
+            DataGridColumnInfo {
+                name: "id".to_string(),
+                data_type: "int".to_string(),
+                is_nullable: false,
+                is_primary_key: true,
+                column_default: None,
+                extra: None,
+            },
+            DataGridColumnInfo {
+                name: "event_type".to_string(),
+                data_type: "varchar".to_string(),
+                is_nullable: false,
+                is_primary_key: false,
+                column_default: None,
+                extra: None,
+            },
+        ]),
+    };
+
+    let mut insert = request(DataGridExtractorId::SqlInserts);
+    insert.database_type = Some(DatabaseType::Kingbase);
+    insert.identifier_quote = Some("`".to_string());
+    insert.table_meta = Some(table_meta.clone());
+    insert.columns = vec![column("id", 0), column("event_type", 1)];
+    insert.rows = vec![vec![json!(1), json!("login")]];
+    let insert_result = extract_data_grid_selection(insert).expect("Kingbase SQL INSERT extraction");
+    assert_eq!(insert_result.text, "INSERT INTO `audit-schema`.`events` (`id`, `event_type`) VALUES (1, 'login');");
+
+    let mut updates = request(DataGridExtractorId::SqlUpdates);
+    updates.database_type = Some(DatabaseType::Kingbase);
+    updates.identifier_quote = Some("`".to_string());
+    updates.table_meta = Some(table_meta);
+    updates.columns = vec![column("id", 0), column("event_type", 1)];
+    updates.rows = vec![vec![json!(1), json!("logout")]];
+    let updates_result = extract_data_grid_selection(updates).expect("Kingbase SQL UPDATE extraction");
+    assert_eq!(updates_result.text, "UPDATE `audit-schema`.`events` SET `event_type` = 'logout' WHERE `id` = 1;");
+}
+
+#[test]
 fn sql_update_computed_column_option_matches_the_frontend_capability() {
     let mut request = request(DataGridExtractorId::SqlUpdates);
     request.columns[1].display_name = "search_text".to_string();
@@ -595,6 +642,7 @@ fn build_data_grid_copy_update_statements_returns_empty_for_mongodb() {
     use crate::data_grid_sql::{build_data_grid_copy_update_statements, DataGridCopyUpdateStatementOptions};
     let options = DataGridCopyUpdateStatementOptions {
         database_type: Some(DatabaseType::MongoDb),
+        identifier_quote: None,
         table_meta: DataGridTableMeta {
             catalog: None,
             database: None,
