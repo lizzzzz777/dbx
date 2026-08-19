@@ -9,10 +9,10 @@ use mysql_async::prelude::Queryable;
 use mysql_async::Row as MysqlRow;
 
 use crate::agent_connection::{
-    agent_connect_params, agent_connect_params_with_role, h2_file_path_from_jdbc_url, is_h2_file_connection,
-    mongo_legacy_error_with_auth_hint, mongo_uses_legacy_driver, oracle_alternate_connect_config_labels,
-    oracle_alternate_connect_configs, oracle_error_with_driver_hint, should_retry_mongo_with_legacy_driver,
-    trino_like_jdbc_connection_string, AgentSessionRole,
+    agent_connect_params, agent_connect_params_with_role, h2_file_path_from_jdbc_url, hive_uses_zookeeper_discovery,
+    is_h2_file_connection, mongo_legacy_error_with_auth_hint, mongo_uses_legacy_driver,
+    oracle_alternate_connect_config_labels, oracle_alternate_connect_configs, oracle_error_with_driver_hint,
+    should_retry_mongo_with_legacy_driver, trino_like_jdbc_connection_string, AgentSessionRole,
 };
 use crate::agent_manager::{AgentManager, JavaRuntimeMode, DEFAULT_JRE_KEY};
 use crate::agent_recovery::{RecoveryDecision, RecoveryPolicy, RecoveryScope};
@@ -182,6 +182,7 @@ macro_rules! agent_connection_pool_database_type {
             | DatabaseType::Cassandra
             | DatabaseType::Bigquery
             | DatabaseType::Kylin
+            | DatabaseType::Ignite
             | DatabaseType::Sundb
             | DatabaseType::Oscar
             | DatabaseType::Tdengine
@@ -618,15 +619,19 @@ pub fn upsert_connection_url_param(params: Option<&str>, key: &str, value: &str)
     parts.join("&")
 }
 
-pub fn prestosql_jdbc_config_for_endpoint(config: &ConnectionConfig, host: &str, port: u16) -> ConnectionConfig {
+pub fn prestosql_jdbc_config_for_endpoint(
+    config: &ConnectionConfig,
+    host: &str,
+    port: u16,
+) -> Result<ConnectionConfig, String> {
     let mut jdbc_config = config.clone();
     jdbc_config.connection_string =
-        Some(trino_like_jdbc_connection_string(config, host, port, config.effective_database().unwrap_or("")));
+        Some(trino_like_jdbc_connection_string(config, host, port, config.effective_database().unwrap_or(""))?);
     jdbc_config.url_params = None;
     if jdbc_config.jdbc_driver_class.as_deref().is_none_or(|value| value.trim().is_empty()) {
         jdbc_config.jdbc_driver_class = Some(PRESTOSQL_JDBC_DRIVER_CLASS.to_string());
     }
-    jdbc_config
+    Ok(jdbc_config)
 }
 
 pub fn gaussdb_uses_m_jdbc_driver(config: &ConnectionConfig) -> bool {
@@ -1215,7 +1220,7 @@ impl AppState {
         if sqlserver_uses_legacy_driver(config) {
             let legacy_config = sqlserver_legacy_agent_config(config);
             let connect_params =
-                agent_connect_params(&legacy_config, host, port, legacy_config.effective_database().unwrap_or(""));
+                agent_connect_params(&legacy_config, host, port, legacy_config.effective_database().unwrap_or(""))?;
             let mut client = self
                 .agent_manager
                 .spawn(&legacy_config.db_type, legacy_config.driver_profile.as_deref())
@@ -1259,7 +1264,7 @@ impl AppState {
         if sqlserver_uses_legacy_driver(config) {
             let legacy_config = sqlserver_legacy_agent_config(config);
             let connect_params =
-                agent_connect_params(&legacy_config, host, port, legacy_config.effective_database().unwrap_or(""));
+                agent_connect_params(&legacy_config, host, port, legacy_config.effective_database().unwrap_or(""))?;
             let mut client = self
                 .agent_manager
                 .spawn(&legacy_config.db_type, legacy_config.driver_profile.as_deref())
@@ -1950,7 +1955,7 @@ impl AppState {
             DatabaseType::MongoDb => {
                 if mongo_uses_legacy_driver(&db_config) {
                     log::info!("Using configured MongoDB legacy driver for connection_id={connection_id}");
-                    let connect_params = serde_json::json!({ "connection": agent_connect_params(&db_config, &host, port, db_config.effective_database().unwrap_or("")) });
+                    let connect_params = serde_json::json!({ "connection": agent_connect_params(&db_config, &host, port, db_config.effective_database().unwrap_or(""))? });
                     let mut client = self.agent_manager.spawn(&DatabaseType::MongoDb, Some("mongodb-legacy")).await?;
                     client.connect(connect_params).await.map_err(|err| mongo_legacy_error_with_auth_hint(&err))?;
                     PoolKind::agent(client)
@@ -1993,7 +1998,7 @@ impl AppState {
                     };
                     if should_retry_mongo_with_legacy_driver(&native_err) {
                         log::info!("Native MongoDB driver failed ({native_err}), falling back to agent driver");
-                        let connect_params = serde_json::json!({ "connection": agent_connect_params(&db_config, &host, port, db_config.effective_database().unwrap_or("")) });
+                        let connect_params = serde_json::json!({ "connection": agent_connect_params(&db_config, &host, port, db_config.effective_database().unwrap_or(""))? });
                         let legacy_agent_key =
                             AgentManager::db_type_to_agent_key(&DatabaseType::MongoDb, Some("mongodb-legacy"))
                                 .ok_or_else(|| "MongoDB (Legacy) Agent mapping is unavailable".to_string())?;
@@ -2150,7 +2155,7 @@ impl AppState {
                     port,
                     db_config.effective_database().unwrap_or(""),
                     session_role,
-                );
+                )?;
                 if db_config.db_type != DatabaseType::ZooKeeper {
                     let agent_session_id = uuid::Uuid::new_v4().simple().to_string();
                     let mut initial_result = self
@@ -2185,7 +2190,7 @@ impl AppState {
                                         port,
                                         db_config.effective_database().unwrap_or(""),
                                         session_role,
-                                    ),
+                                    )?,
                                     agent_connect_timeout(&db_config),
                                 )
                                 .await;
@@ -2217,7 +2222,7 @@ impl AppState {
                                                 port,
                                                 db_config.effective_database().unwrap_or(""),
                                                 session_role,
-                                            ),
+                                            )?,
                                             Some(agent_connect_timeout(&db_config)),
                                         )
                                         .await?;
@@ -2240,7 +2245,7 @@ impl AppState {
                                         port,
                                         alternate_config.effective_database().unwrap_or(""),
                                         session_role,
-                                    );
+                                    )?;
                                     match self
                                         .spawn_routed_shared_agent_client(
                                             &alternate_config.db_type,
@@ -2312,7 +2317,7 @@ impl AppState {
                                             port,
                                             alternate_config.effective_database().unwrap_or(""),
                                             session_role,
-                                        ),
+                                        )?,
                                         Some(agent_connect_timeout(&alternate_config)),
                                     )
                                     .await
@@ -2340,14 +2345,14 @@ impl AppState {
                 }
             }
             DatabaseType::PrestoSql => {
-                let jdbc_config = prestosql_jdbc_config_for_endpoint(&db_config, &host, port);
+                let jdbc_config = prestosql_jdbc_config_for_endpoint(&db_config, &host, port)?;
                 self.external_driver_pool("jdbc", &jdbc_config).await?
             }
             DatabaseType::Jdbc => {
                 let mut jdbc_config = db_config.clone();
                 if host != config.host || port != config.port {
                     if let Some(ref url) = jdbc_config.connection_string {
-                        jdbc_config.connection_string = Some(rewrite_jdbc_url_host(url, &host, port));
+                        jdbc_config.connection_string = Some(rewrite_jdbc_url_host(url, &host, port)?);
                     }
                 }
                 self.external_driver_pool("jdbc", &jdbc_config).await?
@@ -2555,6 +2560,9 @@ impl AppState {
             // A TNS descriptor may contain several failover addresses, so rewriting it
             // through one local tunnel endpoint would silently break Oracle Net routing.
             return Err("Oracle TNS connections cannot be combined with SSH, proxy, or HTTP tunnel layers. Remove the transport layer or use Service Name/SID mode.".to_string());
+        }
+        if hive_uses_zookeeper_discovery(config) {
+            return Err("Hive ZooKeeper service discovery cannot be combined with SSH, proxy, or HTTP tunnel layers because discovered HiveServer2 nodes would bypass the configured transport. Remove the transport layer or use a direct HiveServer2 host and port.".to_string());
         }
 
         #[cfg(feature = "mq-admin")]
@@ -5609,7 +5617,7 @@ mod tests {
         config.host = "presto.example.com".to_string();
         config.port = 9090;
 
-        let jdbc_config = prestosql_jdbc_config_for_endpoint(&config, "127.0.0.1", 19090);
+        let jdbc_config = prestosql_jdbc_config_for_endpoint(&config, "127.0.0.1", 19090).unwrap();
 
         assert_eq!(jdbc_config.connection_string.as_deref(), Some("jdbc:presto://127.0.0.1:19090/hive/default"));
         assert_eq!(jdbc_config.jdbc_driver_class.as_deref(), Some(PRESTOSQL_JDBC_DRIVER_CLASS));
@@ -5622,7 +5630,7 @@ mod tests {
         config.jdbc_driver_class = Some("custom.PrestoDriver".to_string());
         config.jdbc_driver_paths = vec!["D:\\software\\jar\\presto-jdbc-350.jar".to_string()];
 
-        let jdbc_config = prestosql_jdbc_config_for_endpoint(&config, "presto.example.com", 9090);
+        let jdbc_config = prestosql_jdbc_config_for_endpoint(&config, "presto.example.com", 9090).unwrap();
 
         assert_eq!(jdbc_config.jdbc_driver_class.as_deref(), Some("custom.PrestoDriver"));
         assert_eq!(jdbc_config.jdbc_driver_paths, vec!["D:\\software\\jar\\presto-jdbc-350.jar"]);
@@ -5637,7 +5645,7 @@ mod tests {
             "SSL=true&SSLKeyStorePassword=secret&SSLKeyStorePath=D:/keystore/presto/presto_keystore.jks".to_string(),
         );
 
-        let jdbc_config = prestosql_jdbc_config_for_endpoint(&config, "presto.example.com", 8443);
+        let jdbc_config = prestosql_jdbc_config_for_endpoint(&config, "presto.example.com", 8443).unwrap();
 
         assert_eq!(
             jdbc_config.connection_string.as_deref(),
@@ -5813,7 +5821,7 @@ mod tests {
         config.password = "in4mix".to_string();
         config.url_params = Some("INFORMIXSERVER=informix;CLIENT_LOCALE=en_US.utf8".to_string());
 
-        let params = agent_connect_params(&config, "172.26.128.159", 20013, "testdb");
+        let params = agent_connect_params(&config, "172.26.128.159", 20013, "testdb").unwrap();
 
         assert_eq!(params["host"], "172.26.128.159");
         assert_eq!(params["port"], 20013);
@@ -5829,7 +5837,7 @@ mod tests {
         config.db_type = DatabaseType::SqlServer;
         config.external_config = Some(serde_json::json!({ "portExplicit": true }));
 
-        let params = agent_connect_params(&config, r"db.example.com\SQLEXPRESS", 1433, "master");
+        let params = agent_connect_params(&config, r"db.example.com\SQLEXPRESS", 1433, "master").unwrap();
 
         assert_eq!(params["port_explicit"], true);
     }
@@ -5887,7 +5895,7 @@ mod tests {
         config.password = "secret".to_string();
         config.url_params = Some("authSource=admin&authMechanism=SCRAM-SHA-1".to_string());
 
-        let params = agent_connect_params(&config, "172.22.4.42", 27017, "RestCloud_V45PUB_Gateway");
+        let params = agent_connect_params(&config, "172.22.4.42", 27017, "RestCloud_V45PUB_Gateway").unwrap();
 
         assert_eq!(params["connection_string"], "mongodb://mongouser:secret@172.22.4.42:27017/RestCloud%5FV45PUB%5FGateway?authSource=admin&authMechanism=SCRAM-SHA-1");
     }
@@ -5899,7 +5907,7 @@ mod tests {
         config.connection_string =
             Some("mongodb://mongouser:secret@172.22.4.42:27017/RestCloud_V45PUB_Gateway?authSource=admin".to_string());
 
-        let params = agent_connect_params(&config, "172.22.4.42", 27017, "");
+        let params = agent_connect_params(&config, "172.22.4.42", 27017, "").unwrap();
 
         assert_eq!(params["database"], "RestCloud_V45PUB_Gateway");
     }
@@ -5997,7 +6005,7 @@ mod tests {
         config.sysdba = true;
         config.oracle_connection_type = Some("service_name".to_string());
 
-        let params = agent_connect_params(&config, "oracle.example.com", 1521, "ORCLPDB1");
+        let params = agent_connect_params(&config, "oracle.example.com", 1521, "ORCLPDB1").unwrap();
 
         assert_eq!(params["database"], "SYSDBA:ORCLPDB1");
         assert_eq!(params["sysdba"], true);
@@ -6040,7 +6048,7 @@ mod tests {
             config.url_params = Some("sslmode=disable".to_string());
             config.connection_string = Some(stale_connection_string.to_string());
 
-            let params = agent_connect_params(&config, host, port, "platform_face_freezer_jgj");
+            let params = agent_connect_params(&config, host, port, "platform_face_freezer_jgj").unwrap();
 
             assert_eq!(params["database"], "platform_face_freezer_jgj");
             assert_eq!(params["connection_string"], expected_connection_string);
@@ -6053,7 +6061,7 @@ mod tests {
         config.db_type = DatabaseType::Oracle;
         config.oracle_connection_type = Some("sid".to_string());
 
-        let params = agent_connect_params(&config, "127.0.0.1", 11521, "ORCL");
+        let params = agent_connect_params(&config, "127.0.0.1", 11521, "ORCL").unwrap();
 
         assert_eq!(params["connection_string"], "jdbc:oracle:thin:@127.0.0.1:11521:ORCL");
     }
@@ -6064,7 +6072,7 @@ mod tests {
         config.db_type = DatabaseType::Oracle;
         config.oracle_connection_type = None;
 
-        let params = agent_connect_params(&config, "127.0.0.1", 11521, "ORCL");
+        let params = agent_connect_params(&config, "127.0.0.1", 11521, "ORCL").unwrap();
 
         assert_eq!(params["connection_string"], "jdbc:oracle:thin:@//127.0.0.1:11521/ORCL");
     }
@@ -6125,7 +6133,7 @@ mod tests {
         config.password = "secret".to_string();
         config.url_params = Some("encrypt=true".to_string());
 
-        let params = agent_connect_params(&config, "hana.example.com", 30013, "TENANT1");
+        let params = agent_connect_params(&config, "hana.example.com", 30013, "TENANT1").unwrap();
 
         assert_eq!(params["database"], "TENANT1");
         assert_eq!(params["connection_string"], "jdbc:sap://hana.example.com:30013/?databaseName=TENANT1&encrypt=true");
@@ -8074,6 +8082,23 @@ for line in sys.stdin:
 
         let error = state.connection_host_port("oracle-tns", &config).await.unwrap_err();
         assert!(error.contains("cannot be combined with SSH, proxy, or HTTP tunnel"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn hive_zookeeper_discovery_rejects_static_transport_layers() {
+        let (state, dir) = test_app_state().await;
+        let mut config = mysql_config(Some("default"));
+        config.db_type = DatabaseType::Hive;
+        config.connection_string = Some(
+            "jdbc:hive2://zk1.example.com:2181,zk2.example.com:2181/default;serviceDiscoveryMode=zooKeeper".to_string(),
+        );
+        config.url_params = Some("serviceDiscoveryMode=zooKeeper".to_string());
+        config.transport_layers = vec![TransportLayerConfig::Ssh(ssh_layer("hive-zk-tunnel", ""))];
+
+        let error = state.connection_host_port("hive-zookeeper", &config).await.unwrap_err();
+        assert!(error.contains("discovered HiveServer2 nodes would bypass the configured transport"));
 
         let _ = std::fs::remove_dir_all(dir);
     }

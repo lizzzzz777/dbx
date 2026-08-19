@@ -106,6 +106,8 @@ export async function upgradeAllAgents(operationId?: string) {
   const backend = await getBackend();
   return backend.upgradeAllAgents(useSettingsStore().editorSettings.updateDownloadSource, operationId);
 }
+export const cancelAgentInstall = forward("cancelAgentInstall");
+export const cancelAgentUpgradeAll = forward("cancelAgentUpgradeAll");
 export const checkAgentUpdateBlockers = forward("checkAgentUpdateBlockers");
 export const uninstallAgent = forward("uninstallAgent");
 export const getAgentJavaRuntimeConfig = forward("getAgentJavaRuntimeConfig");
@@ -171,6 +173,8 @@ export const listForeignKeys = forward("listForeignKeys");
 export const listTriggers = forward("listTriggers");
 export const listConstraints = forward("listConstraints");
 export const listPartitions = forward("listPartitions");
+export const getTablePartitionStatus = forward("getTablePartitionStatus");
+export const listInvalidIndexes = forward("listInvalidIndexes");
 export const listSubpartitions = forward("listSubpartitions");
 export const getTableDdl = forward("getTableDdl");
 export const getTableDisplayDdl = forward("getTableDisplayDdl");
@@ -441,6 +445,7 @@ export const redisGetStreamConsumers = forward("redisGetStreamConsumers");
 export const redisGetStreamPending = forward("redisGetStreamPending");
 export const redisSetString = forward("redisSetString");
 export const redisDeleteKey = forward("redisDeleteKey");
+export const redisRenameKey = forward("redisRenameKey");
 export const redisHashSet = forward("redisHashSet");
 export const redisHashDel = forward("redisHashDel");
 export const redisHashFieldSetTtl = forward("redisHashFieldSetTtl");

@@ -1005,6 +1005,7 @@ async fn live_sqlserver_table_structure_default_changes_drop_existing_constraint
         triggers: Vec::new(),
         table_comment: None,
         original_table_comment: None,
+        partitioned: false,
     });
     assert_eq!(result.warnings, Vec::<String>::new());
     assert_eq!(result.statements.len(), 4);
@@ -1200,6 +1201,7 @@ async fn live_sqlserver_query_result_export_streams_cte_query_to_csv() {
         export_table_name: None,
         export_column_types: None,
         column_comments: None,
+        identifier_quote: None,
         numeric_column_right_align: false,
     };
     let done_seen = AtomicBool::new(false);

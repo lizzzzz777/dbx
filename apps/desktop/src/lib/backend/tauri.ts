@@ -118,6 +118,8 @@ export interface AgentDriverUpdateIssue {
 
 export interface UpgradeAllAgentDriversResult {
   upgraded: number;
+  /** Drivers whose install was aborted by a user cancel (single-driver or batch). */
+  cancelled: number;
   failed: AgentDriverUpdateIssue[];
 }
 
@@ -1644,6 +1646,29 @@ export async function listPartitions(connectionId: string, database: string, sch
   });
 }
 
+export interface TablePartitionStatus {
+  isPartitionedParent: boolean;
+  isPartition: boolean;
+}
+
+export async function getTablePartitionStatus(connectionId: string, database: string, schema: string, table: string): Promise<TablePartitionStatus> {
+  return invoke("get_table_partition_status", {
+    connectionId,
+    database,
+    schema,
+    table,
+  });
+}
+
+export async function listInvalidIndexes(connectionId: string, database: string, schema: string, table: string): Promise<string[]> {
+  return invoke("list_invalid_indexes", {
+    connectionId,
+    database,
+    schema,
+    table,
+  });
+}
+
 export async function listSubpartitions(connectionId: string, database: string, schema: string, table: string, catalog?: string): Promise<SubpartitionInfo[]> {
   return invoke("list_subpartitions", {
     connectionId,
@@ -1890,6 +1915,14 @@ export async function installAgent(dbType: string, source?: UpdateDownloadSource
 
 export async function upgradeAllAgents(source?: UpdateDownloadSource, operationId?: string): Promise<UpgradeAllAgentDriversResult> {
   return invoke("upgrade_all_agents", { source, operationId });
+}
+
+export async function cancelAgentInstall(dbType: string, operationId?: string): Promise<void> {
+  return invoke("cancel_agent_install", { dbType, operationId });
+}
+
+export async function cancelAgentUpgradeAll(operationId?: string): Promise<void> {
+  return invoke("cancel_agent_upgrade_all", { operationId });
 }
 
 export async function checkAgentUpdateBlockers(dbTypes: string[]): Promise<AgentUpdateBlocker[]> {
@@ -2317,6 +2350,10 @@ export async function redisSetString(connectionId: string, db: number, keyRaw: s
 
 export async function redisDeleteKey(connectionId: string, db: number, keyRaw: string): Promise<void> {
   return invoke("redis_delete_key", { connectionId, db, keyRaw });
+}
+
+export async function redisRenameKey(connectionId: string, db: number, keyRaw: string, newKeyRaw: string): Promise<void> {
+  return invoke("redis_rename_key", { connectionId, db, keyRaw, newKeyRaw });
 }
 
 export async function redisHashSet(connectionId: string, db: number, keyRaw: string, field: string, value: string, ttl?: number): Promise<void> {
@@ -4287,6 +4324,7 @@ export interface QueryResultExportRequest {
   exportColumnTypes?: Array<string | null | undefined>;
   numericColumnRightAlign?: boolean;
   columnComments?: Array<string | null> | null;
+  identifierQuote?: string;
 }
 
 export async function startTableExport(request: TableExportRequest, onProgress: (progress: TableExportProgress) => void): Promise<TableExportProgress> {

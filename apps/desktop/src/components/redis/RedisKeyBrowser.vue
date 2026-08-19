@@ -875,6 +875,38 @@ function onKeyDeleted(keyRaw: string) {
   removeKnownKey(keyRaw);
 }
 
+function onKeyRenamed(oldKeyRaw: string, newKeyRaw: string, newKeyDisplay: string) {
+  connectionStore.invalidateCompletionCache(props.connectionId, String(props.db));
+  if (isSearchMode.value) {
+    void loadKeys();
+    return;
+  }
+
+  const previous = flatKeys.value.find((key) => key.key_raw === oldKeyRaw);
+  if (!previous) {
+    void loadKeys();
+    return;
+  }
+
+  loadedKeyRaws.delete(oldKeyRaw);
+  loadedKeyRaws.add(newKeyRaw);
+  flatKeys.value = flatKeys.value.map((key) => (key.key_raw === oldKeyRaw ? { ...key, key_raw: newKeyRaw, key_display: newKeyDisplay } : key));
+  if (selectedKeyRaw.value === oldKeyRaw) selectedKeyRaw.value = newKeyRaw;
+  if (checkedKeys.value.has(oldKeyRaw)) {
+    const nextCheckedKeys = new Set(checkedKeys.value);
+    nextCheckedKeys.delete(oldKeyRaw);
+    nextCheckedKeys.add(newKeyRaw);
+    checkedKeys.value = nextCheckedKeys;
+  }
+  if (useFlatKeySearchRows.value) {
+    treeKeys.value = [];
+    treeIndex = null;
+    refreshSelectedGroupLeafCounts();
+  } else {
+    rebuildTree(false);
+  }
+}
+
 function redisValueToKeyInfo(value: RedisValue): RedisKeyInfo {
   return {
     key_display: value.key_display,
@@ -2013,7 +2045,9 @@ defineExpose({ focusSearch, insertCommand, executeCommand: executeAiCommand });
                       <component :is="expandedGroupIds.has(row.node.id) ? ChevronDown : ChevronRight" class="w-3 h-3 shrink-0 text-muted-foreground" />
                       <component :is="expandedGroupIds.has(row.node.id) ? FolderOpen : FolderClosed" class="h-3.5 w-3.5 shrink-0 text-amber-500" />
                       <span class="dbx-editor-font-family truncate">{{ row.node.label }}</span>
-                      <span class="text-muted-foreground ml-1" :title="isFuzzyHierarchyView ? t('redis.loadedMatchingKeys', { count: row.node.loadedLeafCount }) : undefined">({{ row.node.loadedLeafCount }})</span>
+                      <span class="text-muted-foreground ml-1" :title="isFuzzyHierarchyView ? t('redis.loadedMatchingKeys', { count: row.node.loadedLeafCount }) : hasMore ? t('redis.loadedGroupKeysPartial', { count: row.node.loadedLeafCount }) : undefined"
+                        >({{ row.node.loadedLeafCount }}{{ !isFuzzyHierarchyView && hasMore ? "+" : "" }})</span
+                      >
                     </template>
                     <template v-else>
                       <span class="relative flex h-4 w-4 shrink-0 items-center justify-center">
@@ -2093,7 +2127,19 @@ defineExpose({ focusSearch, insertCommand, executeCommand: executeAiCommand });
             </div>
 
             <TabsContent value="detail" class="m-0 min-h-0 flex-1 flex flex-col">
-              <RedisValueViewer v-if="selectedKey" ref="valueViewerRef" :key="selectedKey.key_raw" :connection-id="connectionId" :db="db" :key-display="selectedKey.key_display" :key-raw="selectedKey.key_raw" :metadata="selectedKey" @deleted="onKeyDeleted" @loaded="onKeyLoaded" />
+              <RedisValueViewer
+                v-if="selectedKey"
+                ref="valueViewerRef"
+                :key="selectedKey.key_raw"
+                :connection-id="connectionId"
+                :db="db"
+                :key-display="selectedKey.key_display"
+                :key-raw="selectedKey.key_raw"
+                :metadata="selectedKey"
+                @deleted="onKeyDeleted"
+                @renamed="onKeyRenamed"
+                @loaded="onKeyLoaded"
+              />
               <div v-else class="flex-1 flex items-center justify-center text-xs text-muted-foreground">
                 {{ t("redis.selectKeyForDetail") }}
               </div>
