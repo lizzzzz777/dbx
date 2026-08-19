@@ -24,6 +24,7 @@ import {
   Loader2,
   MessageSquarePlus,
   Pencil,
+  PictureInPicture2,
   Replace,
   Server,
   ShieldCheck,
@@ -40,6 +41,7 @@ import {
   Search,
 } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
+import DetachedWindowControls from "@/components/layout/DetachedWindowControls.vue";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -55,6 +57,9 @@ import ConnectionGroupBadge from "@/components/connection/ConnectionGroupBadge.v
 import { useQueryStore } from "@/stores/queryStore";
 import { useToast } from "@/composables/useToast";
 import { useNavigationTargets } from "@/composables/useNavigationTargets";
+import { usePanelDetachDrag } from "@/composables/usePanelDetachDrag";
+import { MAIN_WINDOW_LABEL, getDetachedPanelFromLocation, sendDetachedPanelMessage, type AiTabContext } from "@/lib/detached/detachedPanel";
+import { isMacOS } from "@/lib/backend/platform";
 import { buildAiContext, resolveAiDatabaseTarget, resolveAiNamespaceSelection, resolveDefaultAiSchema, runAgentStream, isVectorDbType, isValidActionForMode, defaultActionForMode, type AiAction, type AiAssistantMode, type AiSqlFileContext, type CustomPromptContext } from "@/lib/ai/ai";
 import { isAiConfigModelCandidate } from "@/lib/ai/aiConfigCandidates";
 import { deleteConversationWithCancellation, stopAiGenerationWithFallback } from "@/lib/ai/aiConversationLifecycle";
@@ -78,7 +83,7 @@ import { formatAiInlineMarkdown, handleAiMarkdownLinkClick } from "@/lib/ai/aiMa
 import { aiCancelStream, saveAiConversation, loadAiConversations, deleteAiConversation, listSchemas, listTables, type AiConversation } from "@/lib/backend/api";
 import type { AiMessage } from "@/lib/backend/api";
 import type { AiConfigItem, AiEffortCapability, AiEffortOption, AiEffortSelection } from "@/types/ai";
-import type { ConnectionConfig, QueryTab, SavedSqlFile, TableInfo } from "@/types/database";
+import type { ConnectionConfig, SavedSqlFile, TableInfo } from "@/types/database";
 import { fetchNamespaceOptionsForConnection, useDatabaseOptions } from "@/composables/useDatabaseOptions";
 import { decodeSelectableDatabaseValue, encodeSelectableDatabaseValue, formatDatabaseLabel, resolveDefaultDatabase } from "@/lib/database/defaultDatabase";
 import { normalizeSqliteNamespace } from "@/lib/database/sqliteNamespace";
@@ -145,7 +150,8 @@ interface ChatMessage {
 }
 
 const props = defineProps<{
-  tab?: QueryTab;
+  /** 活动标签上下文：主窗口传完整 QueryTab，分离子窗口由主窗口快照重建。 */
+  tab?: AiTabContext;
   connection?: ConnectionConfig;
 }>();
 
@@ -158,7 +164,39 @@ const emit = defineEmits<{
   executeRedisCommand: [command: string];
   openExplainPlan: [sql: string];
   close: [];
+  /** 拖拽面板头部分离为独立窗口（仅主窗口内停靠时触发）。 */
+  detach: [position: { x: number; y: number }];
+  /** 合并回主窗口（仅独立窗口模式显示）。 */
+  dock: [];
 }>();
+
+// 当前是否运行在独立子窗口中。
+const isDetachedWindow = getDetachedPanelFromLocation() !== null;
+const isMac = isMacOS();
+const isDesktop = isTauriRuntime();
+
+/** 点击按钮分离为独立窗口：以点击处的屏幕坐标作为新窗口位置。 */
+function onDetachClick(event: MouseEvent) {
+  emit("detach", { x: event.screenX, y: event.screenY });
+}
+
+/** 独立窗口为无边框，双击面板头部切换最大化（双击按钮时忽略）。 */
+async function onHeaderDblclick(event: MouseEvent) {
+  if (!isDetachedWindow) return;
+  if ((event.target as HTMLElement | null)?.closest("button")) return;
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().toggleMaximize();
+  } catch (error) {
+    console.error("[detached-panel] toggle maximize failed", error);
+  }
+}
+
+const { onHeaderPointerDown } = usePanelDetachDrag({
+  isDetached: () => isDetachedWindow,
+  title: () => "AI",
+  onDetach: (position) => emit("detach", position),
+});
 
 const prompt = ref("");
 const messages = ref<ChatMessage[]>([]);
@@ -926,6 +964,11 @@ async function loadDatabases(connection = props.connection): Promise<string[]> {
 async function changeConnection(connectionId: string) {
   const conn = connectionStore.getConfig(connectionId);
   if (!conn) return;
+  if (isDetachedWindow) {
+    // 独立窗口中没有标签页上下文，转发给主窗口执行连接切换。
+    void sendDetachedPanelMessage(MAIN_WINDOW_LABEL, { action: "ai-change-connection", connectionId });
+    return;
+  }
   connectionStore.activeConnectionId = connectionId;
   const tab = props.tab;
   const tabId = tab ? tab.id : queryStore.createTab(connectionId, resolveDefaultDatabase(conn, []));
@@ -946,6 +989,11 @@ async function changeConnection(connectionId: string) {
 }
 
 function changeNamespace(value: string) {
+  if (isDetachedWindow) {
+    // 独立窗口中没有标签页上下文，转发给主窗口执行命名空间切换。
+    void sendDetachedPanelMessage(MAIN_WINDOW_LABEL, { action: "ai-change-namespace", value });
+    return;
+  }
   const tab = props.tab;
   const connection = props.connection;
   if (!tab || !connection) return;
@@ -1499,17 +1547,28 @@ async function openMessageMention(mention: AiMessageMention) {
     if (mention.kind === "sqlFile") {
       const file = await savedSqlStore.ensureFileContent(mention.id);
       if (file) {
+        if (isDetachedWindow) {
+          // 独立窗口中没有标签页上下文，转发给主窗口打开。
+          void sendDetachedPanelMessage(MAIN_WINDOW_LABEL, { action: "open-saved-sql", file });
+          return;
+        }
         const tabId = queryStore.openSavedSql(file);
         connectionStore.activeConnectionId = queryStore.tabs.find((tab) => tab.id === tabId)?.connectionId ?? file.connectionId;
       }
       return;
     }
-    await openTableTarget({
+    const target = {
       connectionId: mention.connectionId || props.tab?.connectionId || props.connection?.id || "",
       database: mention.database || props.tab?.database || props.connection?.database || "",
       schema: mention.schema,
       tableName: mention.table,
-    });
+    };
+    if (isDetachedWindow) {
+      // 独立窗口中没有标签页上下文，转发给主窗口打开。
+      void sendDetachedPanelMessage(MAIN_WINDOW_LABEL, { action: "ai-open-table", target });
+      return;
+    }
+    await openTableTarget(target);
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
     toast(translateBackendError(t, message), 5000);
@@ -2421,8 +2480,14 @@ async function openExternalUrl(url: string) {
 
 <template>
   <div ref="assistantRootRef" class="flex h-full min-h-0 flex-col overflow-hidden">
-    <div class="flex items-center gap-2 border-b px-3 shrink-0" :class="settings.editorSettings.appLayout === 'classic' ? 'h-9' : 'h-10'">
-      <span class="flex flex-1 self-stretch items-center truncate text-xs font-medium" data-tauri-drag-region>
+    <div
+      class="flex items-center gap-2 border-b px-3 shrink-0"
+      :class="[settings.editorSettings.appLayout === 'classic' ? 'h-9' : 'h-10', { 'pl-20': isDetachedWindow && isMac }]"
+      :data-tauri-drag-region="isDetachedWindow ? 'deep' : undefined"
+      @pointerdown="onHeaderPointerDown"
+      @dblclick="onHeaderDblclick"
+    >
+      <span class="flex flex-1 self-stretch items-center truncate text-xs font-medium">
         {{ chatTitle }}
       </span>
       <ProductionContextBadge v-if="productionContext.active" compact />
@@ -2475,6 +2540,13 @@ async function openExternalUrl(url: string) {
       </Popover>
       <Button variant="ghost" size="icon" class="h-6 w-6" @click="clearMessages" :title="t('ai.clear')">
         <Trash2 class="h-3.5 w-3.5" />
+      </Button>
+      <DetachedWindowControls v-if="isDetachedWindow && !isMac" />
+      <Button v-if="isDetachedWindow" variant="ghost" size="icon" class="h-6 w-6" :title="t('panelDetach.dock')" @click="emit('dock')">
+        <PictureInPicture2 class="h-3.5 w-3.5" />
+      </Button>
+      <Button v-else-if="isDesktop" variant="ghost" size="icon" class="h-6 w-6" :title="t('panelDetach.detach')" @click="onDetachClick">
+        <PictureInPicture2 class="h-3.5 w-3.5" />
       </Button>
       <Button variant="ghost" size="icon" class="h-6 w-6" @click="emit('close')">
         <X class="h-3.5 w-3.5" />

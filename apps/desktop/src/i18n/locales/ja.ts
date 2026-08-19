@@ -2051,6 +2051,13 @@ export default withEnglishFallback({
     legacy: "バックエンドがエラーを返しました。",
     unknown: "予期しないバックエンドエラーが発生しました。",
   },
+  panelDetach: {
+    dock: "メインウィンドウに戻す",
+    detach: "別ウィンドウに分離",
+    tableInfoEmpty: "オブジェクトブラウザーでテーブルを選択してください",
+    objectBrowserMissingConnection: "このオブジェクトブラウザーウィンドウの接続が見つかりません。",
+    multiExecuteUnsupported: "分離ウィンドウではマルチデータベース実行はまだサポートされていません",
+  },
   common: {
     fileNotFound: "ファイルが存在しません: {path}",
     language: "言語",
@@ -2645,6 +2652,8 @@ export default withEnglishFallback({
     unpin: "ピン留め解除",
     fixTab: "タブを固定",
     unfixTab: "タブの固定を解除",
+    openInSeparateWindow: "別ウィンドウで開く",
+    openInSeparateWindowFailed: "別ウィンドウを開けませんでした。タブはメインウィンドウに残っています。",
     refreshTab: "データを更新",
     renameTab: "タブ名を変更",
     duplicateTab: "タブを複製",

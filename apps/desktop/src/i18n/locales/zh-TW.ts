@@ -2025,6 +2025,13 @@ export default withEnglishFallback({
     legacy: "後端回傳了錯誤。",
     unknown: "發生未預期的後端錯誤。",
   },
+  panelDetach: {
+    dock: "合併回主視窗",
+    detach: "分離為獨立視窗",
+    tableInfoEmpty: "在物件瀏覽器中選擇要檢視的資料表",
+    objectBrowserMissingConnection: "找不到此物件瀏覽器視窗對應的連線。",
+    multiExecuteUnsupported: "獨立視窗暫不支援多庫執行",
+  },
   common: {
     fileNotFound: "檔案不存在：{path}",
     language: "語言",
@@ -2621,6 +2628,8 @@ export default withEnglishFallback({
     unpin: "取消置頂",
     fixTab: "固定分頁",
     unfixTab: "取消固定分頁",
+    openInSeparateWindow: "用獨立視窗開啟",
+    openInSeparateWindowFailed: "獨立視窗開啟失敗，分頁已保留在主視窗。",
     refreshTab: "重新整理資料",
     renameTab: "重新命名分頁",
     duplicateTab: "複製分頁",

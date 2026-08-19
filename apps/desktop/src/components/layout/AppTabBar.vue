@@ -2,7 +2,7 @@
 import { computed, ref, watch, nextTick, onUnmounted } from "vue";
 import type { CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
-import { X, Pin, ChevronDown, Table2, Code2, TableProperties, PencilRuler, KeyRound, Pencil, Package, Lock, Copy, AlertTriangle, Network, Minimize2, Maximize2, Settings, CalendarClock, Activity, Gauge, ShieldCheck, Database, GitBranch } from "@lucide/vue";
+import { Activity, AlertTriangle, CalendarClock, ChevronDown, Code2, Copy, Database, Gauge, GitBranch, KeyRound, Lock, Maximize2, Minimize2, Network, Package, Pencil, PencilRuler, PictureInPicture2, Pin, Settings, ShieldCheck, Table2, TableProperties, X } from "@lucide/vue";
 import CustomContextMenu, { type ContextMenuItem } from "@/components/ui/CustomContextMenu.vue";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -17,6 +17,8 @@ import { useTabDrag } from "@/composables/useTabDrag";
 import { connectionColor, isConnectionReadonly, tabDisplayTitle, tabTooltipLines } from "@/lib/tabs/tabPresentation";
 import { hexToRgba } from "@/lib/common/color";
 import { copyToClipboard } from "@/lib/common/clipboard";
+import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import { openDetachedTabWindow } from "@/lib/detached/detachedTabs";
 import { useToast } from "@/composables/useToast";
 import type { QueryTab } from "@/types/database";
 
@@ -53,8 +55,10 @@ const editingTabId = ref<string | null>(null);
 const editingTitle = ref("");
 const isClassicLayout = computed(() => settingsStore.editorSettings.appLayout === "classic");
 const isWrapLayout = computed(() => settingsStore.editorSettings.tabLayout === "wrap");
-const fixedTabs = computed(() => queryStore.tabs.filter((tab) => tab.pinned));
-const regularTabs = computed(() => queryStore.tabs.filter((tab) => !tab.pinned));
+// 待分离（pendingDetach）页签不在页签栏渲染：「用独立窗口打开」直达子窗口，避免先闪现再消失。
+const visibleTabs = computed(() => queryStore.tabs.filter((tab) => !tab.pendingDetach));
+const fixedTabs = computed(() => visibleTabs.value.filter((tab) => tab.pinned));
+const regularTabs = computed(() => visibleTabs.value.filter((tab) => !tab.pinned));
 const hasFixedTabs = computed(() => fixedTabs.value.length > 0);
 const regularSurfaceCount = computed(() => regularTabs.value.length + (props.driverStoreOpen ? 1 : 0) + (props.settingsPageOpen ? 1 : 0));
 const closeConfirmDirtyCount = computed(() => queryStore.closeConfirmDirtyTabIds.length);
@@ -121,6 +125,27 @@ function toggleCompactTabTitle() {
 
 function canRenameTab(tab: QueryTab) {
   return tab.mode === "query";
+}
+
+/**
+ * 将页签移入独立子窗口。prepare（结果写缓存+快照，页签不动）→ 子窗口创建/分配
+ * 成功后 finalize 移除；prepare 不改动页签，失败时天然无损，无需回滚。
+ */
+async function detachTabToWindow(tab: QueryTab) {
+  if (!isTauriRuntime()) return;
+  try {
+    const snapshot = await queryStore.prepareTabDetachSnapshot(tab.id);
+    if (!snapshot) return;
+    const label = await openDetachedTabWindow({ tabId: tab.id, title: tabDisplayTitle(tab, t), snapshot });
+    if (!label) {
+      toast(t("contextMenu.openInSeparateWindowFailed"), 5000);
+      return;
+    }
+    queryStore.finalizeTabDetach(tab.id);
+  } catch (error) {
+    console.error("[detached-tab] open failed", error);
+    toast(error instanceof Error ? error.message : String(error), 5000);
+  }
 }
 
 function startRenameTab(tab: QueryTab) {
@@ -323,6 +348,12 @@ function getTabMenuItems(tab: QueryTab): ContextMenuItem[] {
       action: () => queryStore.togglePinnedTab(tab.id),
       icon: Pin,
       iconClass: tab.pinned ? "fill-current" : "",
+    },
+    {
+      label: t("contextMenu.openInSeparateWindow"),
+      action: () => void detachTabToWindow(tab),
+      icon: PictureInPicture2,
+      visible: isTauriRuntime(),
     },
     { label: "", separator: true },
     { label: closeCurrentLabel, action: () => queryStore.closeTab(tab.id), icon: X },
@@ -633,7 +664,7 @@ function onOverflowItemKeydown(event: KeyboardEvent, tabId: string, kind: "regul
 </script>
 
 <template>
-  <div v-if="queryStore.tabs.length > 0 || driverStoreOpen || settingsPageOpen" class="app-tab-bar relative flex w-full min-w-0 shrink-0 overflow-hidden" :class="tabBarClass">
+  <div v-if="visibleTabs.length > 0 || driverStoreOpen || settingsPageOpen" class="app-tab-bar relative flex w-full min-w-0 shrink-0 overflow-hidden" :class="tabBarClass">
     <div class="flex w-full min-w-0 shrink-0 overflow-hidden" :class="regularTabRowClass">
       <div class="app-tab-strip relative h-full min-w-0 flex-1 overflow-hidden">
         <div v-if="showRegularTabScrollbar" class="app-tab-scrollbar" :class="{ 'app-tab-scrollbar--dragging': isScrollbarDragging }" @pointerdown="startScrollbarDrag">
@@ -795,7 +826,7 @@ function onOverflowItemKeydown(event: KeyboardEvent, tabId: string, kind: "regul
             </button>
           </PopoverTrigger>
           <PopoverContent align="end" class="w-auto min-w-56 max-w-80 max-h-[min(70vh,28rem)] gap-0 overflow-y-auto rounded-[6px] p-1" @click.stop @keydown.stop>
-            <CustomContextMenu v-for="tab in queryStore.tabs" :key="tab.id" :items="getTabMenuItems(tab)" v-slot="{ onContextMenu }">
+            <CustomContextMenu v-for="tab in visibleTabs" :key="tab.id" :items="getTabMenuItems(tab)" v-slot="{ onContextMenu }">
               <div
                 class="group flex w-full items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-sm outline-hidden hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
                 :class="tab.id === queryStore.activeTabId && !driverStoreActive && !settingsPageActive ? 'bg-accent/70 text-accent-foreground' : ''"

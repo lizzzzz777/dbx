@@ -71,7 +71,11 @@ describe("settings store type color scheme persistence", () => {
   it("stages scheme edits in the settings draft", () => {
     const dialogSource = readFileSync(new URL("../../components/editor/EditorSettingsDialog.vue", import.meta.url), "utf8");
 
-    expect(dialogSource).toContain("editDataGridTypeColorSchemes.value = structuredClone(schemes)");
+    // structuredClone cannot clone Vue reactive proxies (store state / props round-trips);
+    // cloning must go through toRaw first, otherwise opening the settings page throws
+    // DataCloneError mid-setup and wedges the whole component tree.
+    expect(dialogSource).toContain("structuredClone(toRaw(settingsStore.editorSettings.dataGridTypeColorSchemes))");
+    expect(dialogSource).toContain("editDataGridTypeColorSchemes.value = structuredClone(toRaw(schemes))");
     expect(dialogSource).toContain("editActiveDataGridTypeColorSchemeId.value = activeId");
     expect(dialogSource).not.toMatch(/settingsStore\.updateEditorSettings\w*\(\{[^}]*DataGridTypeColorScheme/);
   });

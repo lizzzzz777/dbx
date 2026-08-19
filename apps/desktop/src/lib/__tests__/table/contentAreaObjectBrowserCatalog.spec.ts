@@ -5,7 +5,9 @@ const contentAreaSource = readFileSync(new URL("../../../components/layout/Conte
 const connectionTreeSource = readFileSync(new URL("../../../components/sidebar/ConnectionTree.vue", import.meta.url), "utf8");
 const ddlViewDialogSource = readFileSync(new URL("../../../components/objects/DdlViewDialog.vue", import.meta.url), "utf8");
 const objectBrowserSource = readFileSync(new URL("../../../components/objects/ObjectBrowser.vue", import.meta.url), "utf8");
-const fetchTableDdlSource = objectBrowserSource.match(/async function fetchTableDdl\(\)[\s\S]*?(?=\nasync function fetchTableColumns\()/)?.[0] ?? "";
+// 表信息面板的 DDL 加载逻辑已抽取到共享组件（内嵌侧栏与分离子窗口共用）。
+const tableInfoPanelSource = readFileSync(new URL("../../../components/objects/TableInfoPanel.vue", import.meta.url), "utf8");
+const fetchTableDdlSource = tableInfoPanelSource.match(/async function fetchTableDdl\(\)[\s\S]*?(?=\nasync function fetchTableColumns\()/)?.[0] ?? "";
 const exportStructureSource = objectBrowserSource.match(/async function exportStructure\([\s\S]*?(?=\nasync function exportDataLegacy\()/)?.[0] ?? "";
 
 function openingTag(source: string, componentName: string): string {

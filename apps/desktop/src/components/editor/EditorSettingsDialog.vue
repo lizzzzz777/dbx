@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, shallowRef, computed, onMounted, onUnmounted, nextTick } from "vue";
+import { ref, watch, shallowRef, computed, onMounted, onUnmounted, nextTick, toRaw } from "vue";
 import type { Ref } from "vue";
 import type { EditorView as EditorViewType } from "@codemirror/view";
 import { useI18n } from "vue-i18n";
@@ -307,7 +307,8 @@ const editUiScale = ref(settingsStore.editorSettings.uiScale);
 const editTheme = ref(settingsStore.editorSettings.theme);
 const editCustomThemes = ref<CustomTheme[]>([...settingsStore.editorSettings.customThemes]);
 const editActiveCustomThemeId = ref(settingsStore.editorSettings.activeCustomThemeId);
-const editDataGridTypeColorSchemes = ref<DataGridTypeColorScheme[]>(structuredClone(settingsStore.editorSettings.dataGridTypeColorSchemes));
+// store state 是 reactive proxy，structuredClone 无法克隆 proxy（DataCloneError），须先 toRaw 取原始数据（与 DataGrid.vue 同款处理）。
+const editDataGridTypeColorSchemes = ref<DataGridTypeColorScheme[]>(structuredClone(toRaw(settingsStore.editorSettings.dataGridTypeColorSchemes)));
 const editActiveDataGridTypeColorSchemeId = ref(settingsStore.editorSettings.activeDataGridTypeColorSchemeId);
 const showThemeCustomizer = ref(false);
 const showDataGridTypeColorScheme = ref(false);
@@ -823,7 +824,7 @@ function syncEditorSettingsDraftFromStore() {
   editShowColumnTypesInHeader.value = settingsStore.editorSettings.showColumnTypesInHeader;
   editDataGridShowTransposeFieldMetadata.value = settingsStore.editorSettings.dataGridShowTransposeFieldMetadata;
   editColorizeDataGridCellTypes.value = settingsStore.editorSettings.colorizeDataGridCellTypes;
-  editDataGridTypeColorSchemes.value = structuredClone(settingsStore.editorSettings.dataGridTypeColorSchemes);
+  editDataGridTypeColorSchemes.value = structuredClone(toRaw(settingsStore.editorSettings.dataGridTypeColorSchemes));
   editActiveDataGridTypeColorSchemeId.value = settingsStore.editorSettings.activeDataGridTypeColorSchemeId;
   editShowIndexIndicatorsInHeader.value = settingsStore.editorSettings.showIndexIndicatorsInHeader;
   editCompactColumnHeaderActions.value = settingsStore.editorSettings.compactColumnHeaderActions;
@@ -1423,7 +1424,8 @@ function handleThemeSave(updatedThemes: CustomTheme[], activeId: string) {
 }
 
 function handleDataGridTypeColorSchemeChange(schemes: DataGridTypeColorScheme[], activeId: string) {
-  editDataGridTypeColorSchemes.value = structuredClone(schemes);
+  // schemes 可能经 props 传递被 reactive 包装，structuredClone 无法克隆 proxy，先 toRaw。
+  editDataGridTypeColorSchemes.value = structuredClone(toRaw(schemes));
   editActiveDataGridTypeColorSchemeId.value = activeId;
 }
 
