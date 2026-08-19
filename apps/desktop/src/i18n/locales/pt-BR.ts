@@ -2126,6 +2126,13 @@ export default withEnglishFallback({
     legacy: "O backend retornou um erro.",
     unknown: "Ocorreu um erro inesperado no backend.",
   },
+  panelDetach: {
+    dock: "Reencaixar na janela principal",
+    detach: "Desanexar em janela separada",
+    tableInfoEmpty: "Selecione uma tabela no navegador de objetos",
+    objectBrowserMissingConnection: "A conexão desta janela do navegador de objetos não foi encontrada.",
+    multiExecuteUnsupported: "A execução em vários bancos de dados ainda não é suportada em uma janela separada",
+  },
   common: {
     fileNotFound: "O arquivo não existe: {path}",
     language: "Idioma",
@@ -2800,6 +2807,8 @@ export default withEnglishFallback({
     unpin: "Desafixar",
     fixTab: "Fixar aba",
     unfixTab: "Desafixar aba",
+    openInSeparateWindow: "Abrir em janela separada",
+    openInSeparateWindowFailed: "Falha ao abrir a janela separada. A aba permanece na janela principal.",
     refreshTab: "Atualizar Dados",
     renameTab: "Renomear Aba",
     duplicateTab: "Duplicar Aba",
