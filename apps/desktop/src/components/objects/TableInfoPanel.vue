@@ -12,6 +12,9 @@ import { useToast } from "@/composables/useToast";
 import { usePanelDetachDrag } from "@/composables/usePanelDetachDrag";
 import { useSettingsStore } from "@/stores/settingsStore";
 import * as api from "@/lib/backend/api";
+import { loadObjectDdl, type ObjectDdlRequest } from "@/lib/metadata/objectDdlCache";
+import { loadObjectMetadataFacet } from "@/lib/metadata/objectMetadataCache";
+import { translateBackendError } from "@/i18n/backend-errors";
 import { copyToClipboard } from "@/lib/common/clipboard";
 import { isMacOS } from "@/lib/backend/platform";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
@@ -89,14 +92,19 @@ const { onHeaderPointerDown } = usePanelDetachDrag({
 const tableInfoTab = ref<TableInfoTab>(props.initialTab ?? "ddl");
 const tableColumns = ref<ColumnInfo[]>([]);
 const tableColumnsLoading = ref(false);
+const tableColumnsLoaded = ref(false);
 const tableDdlContent = ref("");
 const tableDdlLoading = ref(false);
+const tableDdlLoaded = ref(false);
 const tableIndexes = ref<IndexInfo[]>([]);
 const tableIndexesLoading = ref(false);
+const tableIndexesLoaded = ref(false);
 const tableForeignKeys = ref<ForeignKeyInfo[]>([]);
 const tableForeignKeysLoading = ref(false);
+const tableForeignKeysLoaded = ref(false);
 const tableTriggers = ref<TriggerInfo[]>([]);
 const tableTriggersLoading = ref(false);
+const tableTriggersLoaded = ref(false);
 const tableInfoSearchQuery = ref("");
 const tableInfoDdlPreRef = ref<HTMLPreElement | null>(null);
 const sidePanelGuard = createSidePanelRequestGuard();
@@ -128,6 +136,18 @@ function tableDdlObjectType(type: string): ObjectSourceKind | undefined {
 /** 表信息请求使用的 schema：表自身 schema > 对象浏览器选择的 schema > 数据库名。 */
 function tableInfoRequestSchema(): string {
   return props.tableSchema || props.fallbackSchema || props.database;
+}
+
+/** 构造对象元数据缓存请求（DDL 与字段/索引等 facet 共用同一缓存键空间）。 */
+function tableMetadataRequest(): ObjectDdlRequest {
+  return {
+    connectionId: props.connection.id,
+    database: props.database || "",
+    schema: tableInfoRequestSchema(),
+    tableName: props.tableName,
+    objectType: tableDdlObjectType(props.tableType),
+    catalog: props.catalog,
+  };
 }
 
 type TableInfoTabItem = { id: TableInfoTab; label: string; icon: Component; count?: number };
@@ -200,82 +220,116 @@ async function selectTableInfoTab(tab: TableInfoTab) {
   else if (nextTab === "triggers") await fetchTableTriggers();
 }
 
-async function fetchTableDdl() {
+async function fetchTableDdl(force = false) {
+  if (tableDdlLoaded.value && !force) return;
   const epoch = sidePanelGuard.capture();
   tableDdlLoading.value = true;
+  let loadedSuccessfully = false;
   try {
-    const ddl = await api.getTableDisplayDdl(props.connection.id, props.database || "", tableInfoRequestSchema(), props.tableName, tableDdlObjectType(props.tableType), props.catalog);
+    const { ddl } = await loadObjectDdl(tableMetadataRequest(), { force });
     if (sidePanelGuard.isStale(epoch)) return;
     tableDdlContent.value = ddl;
+    loadedSuccessfully = true;
   } catch (e: any) {
     if (sidePanelGuard.isStale(epoch)) return;
     tableDdlContent.value = `-- Error: ${e?.message || e}`;
   } finally {
-    if (sidePanelGuard.isFresh(epoch)) tableDdlLoading.value = false;
+    if (sidePanelGuard.isFresh(epoch)) {
+      tableDdlLoaded.value = loadedSuccessfully;
+      tableDdlLoading.value = false;
+    }
   }
 }
 
-async function fetchTableColumns() {
-  if (tableColumns.value.length > 0) return;
+async function fetchTableColumns(force = false) {
+  if (tableColumnsLoaded.value && !force) return;
   const epoch = sidePanelGuard.capture();
   tableColumnsLoading.value = true;
+  let loadedSuccessfully = false;
   try {
-    const columns = await api.getColumns(props.connection.id, props.database || "", tableInfoRequestSchema(), props.tableName, props.catalog);
+    const request = tableMetadataRequest();
+    const { value: columns } = await loadObjectMetadataFacet(request, "columns", () => api.getColumns(request.connectionId, request.database, request.schema || request.database, request.tableName, request.catalog), { force });
     if (sidePanelGuard.isStale(epoch)) return;
     tableColumns.value = columns;
-  } catch {
+    loadedSuccessfully = true;
+  } catch (error) {
     if (sidePanelGuard.isStale(epoch)) return;
     tableColumns.value = [];
+    toast(translateBackendError(t, error), 5000);
   } finally {
-    if (sidePanelGuard.isFresh(epoch)) tableColumnsLoading.value = false;
+    if (sidePanelGuard.isFresh(epoch)) {
+      tableColumnsLoaded.value = loadedSuccessfully;
+      tableColumnsLoading.value = false;
+    }
   }
 }
 
-async function fetchTableIndexes() {
-  if (tableIndexes.value.length > 0) return;
+async function fetchTableIndexes(force = false) {
+  if (tableIndexesLoaded.value && !force) return;
   const epoch = sidePanelGuard.capture();
   tableIndexesLoading.value = true;
+  let loadedSuccessfully = false;
   try {
-    const indexes = await api.listIndexes(props.connection.id, props.database || "", tableInfoRequestSchema(), props.tableName, props.catalog);
+    const request = tableMetadataRequest();
+    const { value: indexes } = await loadObjectMetadataFacet(request, "indexes", () => api.listIndexes(request.connectionId, request.database, request.schema || request.database, request.tableName, request.catalog), { force });
     if (sidePanelGuard.isStale(epoch)) return;
     tableIndexes.value = indexes;
-  } catch {
+    loadedSuccessfully = true;
+  } catch (error) {
     if (sidePanelGuard.isStale(epoch)) return;
     tableIndexes.value = [];
+    toast(translateBackendError(t, error), 5000);
   } finally {
-    if (sidePanelGuard.isFresh(epoch)) tableIndexesLoading.value = false;
+    if (sidePanelGuard.isFresh(epoch)) {
+      tableIndexesLoaded.value = loadedSuccessfully;
+      tableIndexesLoading.value = false;
+    }
   }
 }
 
-async function fetchTableForeignKeys() {
-  if (tableForeignKeys.value.length > 0) return;
+async function fetchTableForeignKeys(force = false) {
+  if (tableForeignKeysLoaded.value && !force) return;
   const epoch = sidePanelGuard.capture();
   tableForeignKeysLoading.value = true;
+  let loadedSuccessfully = false;
   try {
-    const fks = await api.listForeignKeys(props.connection.id, props.database || "", tableInfoRequestSchema(), props.tableName, props.catalog);
+    const request = tableMetadataRequest();
+    const { value: fks } = await loadObjectMetadataFacet(request, "foreign-keys", () => api.listForeignKeys(request.connectionId, request.database, request.schema || request.database, request.tableName, request.catalog), { force });
     if (sidePanelGuard.isStale(epoch)) return;
     tableForeignKeys.value = fks;
-  } catch {
+    loadedSuccessfully = true;
+  } catch (error) {
     if (sidePanelGuard.isStale(epoch)) return;
     tableForeignKeys.value = [];
+    toast(translateBackendError(t, error), 5000);
   } finally {
-    if (sidePanelGuard.isFresh(epoch)) tableForeignKeysLoading.value = false;
+    if (sidePanelGuard.isFresh(epoch)) {
+      tableForeignKeysLoaded.value = loadedSuccessfully;
+      tableForeignKeysLoading.value = false;
+    }
   }
 }
 
-async function fetchTableTriggers() {
-  if (tableTriggers.value.length > 0) return;
+async function fetchTableTriggers(force = false) {
+  if (tableTriggersLoaded.value && !force) return;
   const epoch = sidePanelGuard.capture();
   tableTriggersLoading.value = true;
+  let loadedSuccessfully = false;
   try {
-    const triggers = await api.listTriggers(props.connection.id, props.database || "", tableInfoRequestSchema(), props.tableName, props.catalog);
+    const request = tableMetadataRequest();
+    const { value: triggers } = await loadObjectMetadataFacet(request, "triggers", () => api.listTriggers(request.connectionId, request.database, request.schema || request.database, request.tableName, request.catalog), { force });
     if (sidePanelGuard.isStale(epoch)) return;
     tableTriggers.value = triggers;
-  } catch {
+    loadedSuccessfully = true;
+  } catch (error) {
     if (sidePanelGuard.isStale(epoch)) return;
     tableTriggers.value = [];
+    toast(translateBackendError(t, error), 5000);
   } finally {
-    if (sidePanelGuard.isFresh(epoch)) tableTriggersLoading.value = false;
+    if (sidePanelGuard.isFresh(epoch)) {
+      tableTriggersLoaded.value = loadedSuccessfully;
+      tableTriggersLoading.value = false;
+    }
   }
 }
 
@@ -284,19 +338,24 @@ async function refreshActiveTableInfo() {
 
   if (tableInfoTab.value === "ddl") {
     tableDdlContent.value = "";
-    await fetchTableDdl();
+    tableDdlLoaded.value = false;
+    await fetchTableDdl(true);
   } else if (tableInfoTab.value === "columns") {
     tableColumns.value = [];
-    await fetchTableColumns();
+    tableColumnsLoaded.value = false;
+    await fetchTableColumns(true);
   } else if (tableInfoTab.value === "indexes") {
     tableIndexes.value = [];
-    await fetchTableIndexes();
+    tableIndexesLoaded.value = false;
+    await fetchTableIndexes(true);
   } else if (tableInfoTab.value === "foreignKeys") {
     tableForeignKeys.value = [];
-    await fetchTableForeignKeys();
+    tableForeignKeysLoaded.value = false;
+    await fetchTableForeignKeys(true);
   } else if (tableInfoTab.value === "triggers") {
     tableTriggers.value = [];
-    await fetchTableTriggers();
+    tableTriggersLoaded.value = false;
+    await fetchTableTriggers(true);
   }
 }
 
@@ -333,6 +392,11 @@ watch(
     tableIndexes.value = [];
     tableForeignKeys.value = [];
     tableTriggers.value = [];
+    tableColumnsLoaded.value = false;
+    tableDdlLoaded.value = false;
+    tableIndexesLoaded.value = false;
+    tableForeignKeysLoaded.value = false;
+    tableTriggersLoaded.value = false;
     tableInfoSearchQuery.value = "";
     void selectTableInfoTab(tableInfoTab.value);
   },

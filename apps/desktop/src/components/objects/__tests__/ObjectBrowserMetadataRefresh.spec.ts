@@ -35,14 +35,34 @@ describe("ObjectBrowser table metadata refresh", () => {
     const refreshTableInfo = functionBody("refreshActiveTableInfo", tableInfoPanelSource);
 
     expect(refreshTableInfo).toContain("sidePanelGuard.bump();");
-    expect(refreshTableInfo).toMatch(/tableInfoTab\.value === "ddl"[\s\S]*?tableDdlContent\.value = "";[\s\S]*?await fetchTableDdl\(\);/);
-    expect(refreshTableInfo).toMatch(/tableInfoTab\.value === "columns"[\s\S]*?tableColumns\.value = \[\];[\s\S]*?await fetchTableColumns\(\);/);
-    expect(refreshTableInfo).toMatch(/tableInfoTab\.value === "indexes"[\s\S]*?tableIndexes\.value = \[\];[\s\S]*?await fetchTableIndexes\(\);/);
-    expect(refreshTableInfo).toMatch(/tableInfoTab\.value === "foreignKeys"[\s\S]*?tableForeignKeys\.value = \[\];[\s\S]*?await fetchTableForeignKeys\(\);/);
-    expect(refreshTableInfo).toMatch(/tableInfoTab\.value === "triggers"[\s\S]*?tableTriggers\.value = \[\];[\s\S]*?await fetchTableTriggers\(\);/);
+    expect(refreshTableInfo).toMatch(/tableInfoTab\.value === "ddl"[\s\S]*?tableDdlContent\.value = "";[\s\S]*?await fetchTableDdl\(true\);/);
+    expect(refreshTableInfo).toMatch(/tableInfoTab\.value === "columns"[\s\S]*?tableColumns\.value = \[\];[\s\S]*?await fetchTableColumns\(true\);/);
+    expect(refreshTableInfo).toMatch(/tableInfoTab\.value === "indexes"[\s\S]*?tableIndexes\.value = \[\];[\s\S]*?await fetchTableIndexes\(true\);/);
+    expect(refreshTableInfo).toMatch(/tableInfoTab\.value === "foreignKeys"[\s\S]*?tableForeignKeys\.value = \[\];[\s\S]*?await fetchTableForeignKeys\(true\);/);
+    expect(refreshTableInfo).toMatch(/tableInfoTab\.value === "triggers"[\s\S]*?tableTriggers\.value = \[\];[\s\S]*?await fetchTableTriggers\(true\);/);
+  });
+
+  it("routes table-info metadata through the object caches", () => {
+    // 缓存加载逻辑位于共享组件 TableInfoPanel。
+    expect(tableInfoPanelSource).toContain('from "@/lib/metadata/objectDdlCache"');
+    expect(tableInfoPanelSource).toContain('from "@/lib/metadata/objectMetadataCache"');
+    expect(functionBody("fetchTableDdl", tableInfoPanelSource)).toContain("loadObjectDdl(");
+    for (const name of ["fetchTableColumns", "fetchTableIndexes", "fetchTableForeignKeys", "fetchTableTriggers"]) {
+      expect(functionBody(name, tableInfoPanelSource)).toContain("loadObjectMetadataFacet(");
+      expect(functionBody(name, tableInfoPanelSource)).not.toContain(".value.length > 0");
+    }
   });
 
   it("keeps automatic object reloads free of extra metadata requests", () => {
     expect(functionBody("reload")).not.toContain("refreshActiveTableInfo");
+  });
+
+  it("leaves a failed facet eligible for retry", () => {
+    for (const name of ["fetchTableDdl", "fetchTableColumns", "fetchTableIndexes", "fetchTableForeignKeys", "fetchTableTriggers"]) {
+      const body = functionBody(name, tableInfoPanelSource);
+      expect(body).toContain("let loadedSuccessfully = false;");
+      expect(body).toMatch(/loadedSuccessfully = true;/);
+      expect(body).toMatch(/Loaded\.value = loadedSuccessfully;/);
+    }
   });
 });

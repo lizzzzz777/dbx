@@ -200,6 +200,8 @@ export const SETTINGS_SEARCH_DEFINITIONS: readonly SettingsSearchDefinition[] = 
   { id: "data-export-row-limit-enabled", category: "data", titleKey: "settings.exportRowLimitEnabled", descriptionKey: "settings.exportRowLimitEnabledDescription", targetId: "data" },
   { id: "data-export-row-limit", category: "data", titleKey: "settings.exportRowLimit", descriptionKey: "settings.exportRowLimitDescription", targetId: "data" },
   { id: "data-export-keyset", category: "data", titleKey: "settings.queryExportKeysetOptimizationEnabled", descriptionKey: "settings.queryExportKeysetOptimizationEnabledDescription", targetId: "data" },
+  { id: "data-performance", category: "data", titleKey: "settings.performanceSection", targetId: "data-performance" },
+  { id: "data-metadata-cache", category: "data", titleKey: "settings.metadataCacheMemoryLimit", descriptionKey: "settings.metadataCacheMemoryLimitDescription", targetId: "data-performance" },
   { id: "data-table-template", category: "data", titleKey: "settings.tableColumnTemplateFields", descriptionKey: "settings.tableColumnTemplateFieldsDescription", targetId: "table-column-templates" },
   { id: "data-duckdb", category: "data", titleKey: "settings.duckDbWorkerProcessIsolation", descriptionKey: "settings.duckDbWorkerProcessIsolationDescription", targetId: "data", visible: desktopOnly },
   { id: "data-duckdb-process-limit", category: "data", titleKey: "settings.duckDbWorkerMaxProcesses", descriptionKey: "settings.duckDbWorkerMaxProcessesDescription", targetId: "data", visible: desktopOnly },
