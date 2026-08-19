@@ -2030,6 +2030,13 @@ export default withEnglishFallback({
     legacy: "El backend devolvió un error.",
     unknown: "Ocurrió un error inesperado del backend.",
   },
+  panelDetach: {
+    dock: "Acoplar de nuevo a la ventana principal",
+    detach: "Separar en ventana independiente",
+    tableInfoEmpty: "Selecciona una tabla en el explorador de objetos",
+    objectBrowserMissingConnection: "No se encontró la conexión de esta ventana del explorador de objetos.",
+    multiExecuteUnsupported: "La ejecución en varias bases de datos aún no está disponible en una ventana separada",
+  },
   common: {
     fileNotFound: "El archivo no existe: {path}",
     language: "Idioma",
@@ -2659,6 +2666,8 @@ export default withEnglishFallback({
     unpin: "Desfijar",
     fixTab: "Fijar pestaña",
     unfixTab: "Desfijar pestaña",
+    openInSeparateWindow: "Abrir en una ventana independiente",
+    openInSeparateWindowFailed: "No se pudo abrir la ventana independiente. La pestaña permanece en la ventana principal.",
     refreshTab: "Actualizar datos",
     renameTab: "Renombrar pestaña",
     duplicateTab: "Duplicar pestaña",

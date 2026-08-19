@@ -2095,6 +2095,13 @@ export default {
     legacy: "Backend returned an error.",
     unknown: "An unexpected backend error occurred.",
   },
+  panelDetach: {
+    dock: "Dock back into main window",
+    detach: "Detach into separate window",
+    tableInfoEmpty: "Select a table in the object browser",
+    objectBrowserMissingConnection: "The connection for this object browser window was not found.",
+    multiExecuteUnsupported: "Multi-database execution is not supported in a detached window yet",
+  },
   common: {
     fileNotFound: "File does not exist: {path}",
     language: "Language",
@@ -2727,6 +2734,8 @@ export default {
     unpin: "Unpin",
     fixTab: "Fix Tab",
     unfixTab: "Unfix Tab",
+    openInSeparateWindow: "Open in Separate Window",
+    openInSeparateWindowFailed: "Failed to open the detached window. The tab stays in the main window.",
     refreshTab: "Refresh Data",
     renameTab: "Rename Tab",
     duplicateTab: "Duplicate Tab",

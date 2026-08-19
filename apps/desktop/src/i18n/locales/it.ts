@@ -2028,6 +2028,13 @@ export default withEnglishFallback({
     legacy: "Il backend ha restituito un errore.",
     unknown: "Si è verificato un errore backend imprevisto.",
   },
+  panelDetach: {
+    dock: "Reintegra nella finestra principale",
+    detach: "Scollega in finestra separata",
+    tableInfoEmpty: "Seleziona una tabella nel browser degli oggetti",
+    objectBrowserMissingConnection: "Connessione di questa finestra del browser oggetti non trovata.",
+    multiExecuteUnsupported: "L'esecuzione multi-database non è ancora supportata in una finestra separata",
+  },
   common: {
     fileNotFound: "Il file non esiste: {path}",
     language: "Lingua",
@@ -2657,6 +2664,8 @@ export default withEnglishFallback({
     unpin: "Sblocca",
     fixTab: "Blocca scheda",
     unfixTab: "Sblocca scheda",
+    openInSeparateWindow: "Apri in una finestra separata",
+    openInSeparateWindowFailed: "Apertura della finestra separata non riuscita. La scheda rimane nella finestra principale.",
     refreshTab: "Aggiorna Dati",
     renameTab: "Rinomina Scheda",
     duplicateTab: "Duplica Scheda",
