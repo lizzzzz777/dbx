@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, shallowRef, computed, onMounted, onUnmounted, nextTick, toRaw } from "vue";
+import { ref, watch, shallowRef, computed, onMounted, onUnmounted, nextTick } from "vue";
 import type { Ref } from "vue";
 import type { EditorView as EditorViewType } from "@codemirror/view";
 import { useI18n } from "vue-i18n";
