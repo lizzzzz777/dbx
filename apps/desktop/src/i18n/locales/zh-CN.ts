@@ -2660,6 +2660,8 @@ export default withEnglishFallback({
     unfixTab: "取消固定标签页",
     openInSeparateWindow: "用独立窗口打开",
     openInSeparateWindowFailed: "独立窗口打开失败，页签已保留在主窗口。",
+    detachTabExecuting: "页签正在执行查询或 Explain，请等待完成或停止后再分离。",
+    detachTabTransaction: "页签存在未提交的事务，请先提交或回滚后再分离。",
     refreshTab: "刷新数据",
     renameTab: "重命名标签页",
     duplicateTab: "复制标签页",

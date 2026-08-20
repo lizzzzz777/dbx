@@ -6,7 +6,7 @@
 // 预热 shell 模式（?detached-tab-shell=1）：待命隐藏窗口，收到 assign 后渲染目标页签。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Activity, CalendarClock, Code2, Database, Gauge, KeyRound, Network, PencilRuler, PictureInPicture2, ShieldCheck, Table2, TableProperties, X } from "@lucide/vue";
+import { Activity, AlertTriangle, CalendarClock, Code2, Database, Gauge, KeyRound, Network, PencilRuler, PictureInPicture2, ShieldCheck, Table2, TableProperties, X } from "@lucide/vue";
 import ContentArea from "@/components/layout/ContentArea.vue";
 import EditorToolbar from "@/components/layout/EditorToolbar.vue";
 import DetachedWindowControls from "@/components/layout/DetachedWindowControls.vue";
@@ -32,8 +32,19 @@ import { translateBackendError } from "@/i18n/backend-errors";
 import { isMacOS } from "@/lib/backend/platform";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
 import * as api from "@/lib/backend/api";
-import { broadcastDetachedPanelMessage, clampRectToVisibleMonitor, listenDetachedPanelMessages, loadDetachedWindowPlacement, resolveMainWindowAnchoredPosition, saveDetachedWindowPlacement, sendDetachedPanelMessage, MAIN_WINDOW_LABEL } from "@/lib/detached/detachedPanel";
+import {
+  broadcastDetachedPanelMessage,
+  clampRectToVisibleMonitor,
+  listenDetachedPanelMessages,
+  loadDetachedWindowPlacement,
+  resolveMainWindowAnchoredPosition,
+  saveDetachedWindowPlacement,
+  sendDetachedPanelMessage,
+  sendDetachedPanelMessageOrThrow,
+  MAIN_WINDOW_LABEL,
+} from "@/lib/detached/detachedPanel";
 import { detachedTabPlacementKey, getDetachedTabModeFromLocation, readDetachedTabEntry, removeDetachedTabEntry, requestDockDetachedTab, restoreDetachedTabSnapshot, serializeDetachedTab, updateDetachedTabSnapshot } from "@/lib/detached/detachedTabs";
+import { collectDataGridPendingSnapshotsForTab, stageDataGridPendingSnapshotsForTab } from "@/composables/useDataGridEditor";
 import { buildTabResultSnapshot, tabResultCacheKey, writeTabResultSnapshot } from "@/lib/tabs/tabResultCache";
 import { resolveExecutableSql, resolveExecutableSqlWithBackend, type SqlExecutionOverride } from "@/lib/sql/sqlExecutionTarget";
 import { tabDisplayTitle } from "@/lib/tabs/tabPresentation";
@@ -199,7 +210,11 @@ async function syncSnapshotNow(): Promise<void> {
       lastResultStamp = stamp;
     }
   }
-  updateDetachedTabSnapshot(tabId.value, serializeDetachedTab(tabValue));
+  const snapshot = serializeDetachedTab(tabValue);
+  // DataGrid 未保存编辑（newRows/dirtyRows/deletedRows 等窗口级缓存）随快照一并转移。
+  const dataGridPending = collectDataGridPendingSnapshotsForTab(tabValue.id);
+  if (dataGridPending) snapshot.dataGridPending = dataGridPending;
+  updateDetachedTabSnapshot(tabId.value, snapshot);
 }
 
 function scheduleSnapshotSync() {
@@ -229,6 +244,9 @@ watch(() => {
     structureDraft: tabValue.structureDraft,
     tableInfoTab: tabValue.tableInfoTab,
     objectBrowser: tabValue.objectBrowser,
+    // data 页签的 grid 编辑计数（崩溃保护同步的触发信号；实际状态同步时现取）。
+    pendingDataChangeCount: tabValue.pendingDataChangeCount ?? 0,
+    pendingDataEditorDraft: tabValue.hasPendingDataEditorDraft === true,
     stamp: resultPayloadStamp(tabValue),
   });
 }, scheduleSnapshotSync);
@@ -277,18 +295,29 @@ async function placeWindow(x?: number, y?: number) {
   }
 }
 
-/** 从 registry 快照装载页签到本窗口，渲染完成后显示窗口。 */
+/** 销毁本窗口（跳过 onCloseRequested，程序性关闭的确认通道；失败仅记日志）。 */
+async function destroyWindow() {
+  try {
+    const win = await currentWindow();
+    await win.destroy();
+  } catch (error) {
+    console.error("[detached-tab] destroy window failed", error);
+  }
+}
+
+/** 从 registry 快照装载页签到本窗口，渲染完成后显示窗口，并向主窗口回执 adopt 结果。 */
 async function adoptTab(targetTabId: string, x?: number, y?: number): Promise<boolean> {
   const entry = readDetachedTabEntry(targetTabId);
-  if (!entry) {
-    console.error("[detached-tab] registry entry missing", targetTabId);
+  const restored = entry ? restoreDetachedTabSnapshot(entry.snapshot) : null;
+  if (!entry || !restored) {
+    console.error("[detached-tab] adopt failed", targetTabId, entry ? "restore snapshot failed" : "registry entry missing");
+    // 回执失败原因并自毁：主窗口据此回滚（不移除页签），本窗口不滞留为空壳。
+    await sendDetachedPanelMessageOrThrow(MAIN_WINDOW_LABEL, { action: "detached-tab-adopt-failed", tabId: targetTabId, reason: entry ? "restore-failed" : "entry-missing" }).catch((error) => console.error("[detached-tab] send adopt-failed ack failed", error));
+    await destroyWindow();
     return false;
   }
-  const restored = restoreDetachedTabSnapshot(entry.snapshot);
-  if (!restored) {
-    console.error("[detached-tab] restore snapshot failed", targetTabId);
-    return false;
-  }
+  // DataGrid 待保存状态先于页签落地（grid 挂载/结果读回后按 cacheKey 取回）。
+  stageDataGridPendingSnapshotsForTab(targetTabId, entry.snapshot.dataGridPending);
   tabId.value = targetTabId;
   queryStore.adoptDetachedTab(restored);
   lastResultStamp = restored.resultCacheKey ? resultPayloadStamp(restored) : "";
@@ -306,11 +335,19 @@ async function adoptTab(targetTabId: string, x?: number, y?: number): Promise<bo
   } catch (error) {
     console.error("[detached-tab] show window failed", error);
   }
+  // adopt 完成回执：主窗口收到后才 finalize 移除主窗口页签；发送失败说明主窗口不可达，自毁避免孤儿窗口。
+  try {
+    await sendDetachedPanelMessageOrThrow(MAIN_WINDOW_LABEL, { action: "detached-tab-adopted", tabId: targetTabId });
+  } catch (error) {
+    console.error("[detached-tab] send adopted ack failed", error);
+    await destroyWindow();
+    return false;
+  }
   return true;
 }
 
 // ---------------------------------------------------------------------------
-// 合并回主窗口（dock；窗口的一切关闭路径都走这里）
+// 合并回主窗口（dock）与统一关闭路径
 // ---------------------------------------------------------------------------
 
 let dockRequested = false;
@@ -328,15 +365,61 @@ async function dockToMainWindow() {
   }
 }
 
-/** 直接关闭窗口（不合并回主窗口）：先移除 registry 中的页签快照（避免下次启动被当作
- * 崩溃残留恢复回主窗口），随后关闭窗口销毁页签。 */
-async function closeWindowDirectly() {
+/**
+ * 页签已在 store 中关闭（事务回滚/会话清理由 closeTab 完成）后的窗口收尾：
+ * 移除 registry 快照（避免下次启动被当作崩溃残留复活），随后销毁窗口。
+ */
+async function finalizeWindowClose() {
   if (tabId.value) removeDetachedTabEntry(tabId.value);
-  try {
-    const win = await currentWindow();
-    await win.close();
-  } catch (error) {
-    console.error("[detached-tab] close window failed", error);
+  await destroyWindow();
+}
+
+/**
+ * 统一关闭入口——标题栏 X 与系统级关闭（Alt+F4/任务栏关闭/macOS 红绿灯）都走这里，
+ * 复用主窗口 dirty-tab 策略（queryStore.closeTab）：脏页签先弹未保存确认
+ * （保存/放弃/取消），干净页签直接关闭。确认关闭才移除 registry 并销毁窗口。
+ */
+function requestCloseWindow() {
+  // dock 进行中：窗口即将由主窗口关闭，不重复处理。
+  if (dockRequested) return;
+  const tabValue = tab.value;
+  if (!tabValue) {
+    // 无页签（待命 shell）：直接销毁。
+    void finalizeWindowClose();
+    return;
+  }
+  // 孤儿窗口（registry 已被主窗口回滚/超时清理）：页签仍归主窗口所有，
+  // 本窗口静默关闭（后端会话/事务经 closeTab 清理），不再弹未保存确认。
+  if (tabId.value && !readDetachedTabEntry(tabId.value)) {
+    queryStore.closeTab(tabValue.id, { force: true });
+    void finalizeWindowClose();
+    return;
+  }
+  queryStore.closeTab(tabValue.id); // 脏页签仅触发未保存确认弹窗；干净页签同步移除
+  if (!tab.value) void finalizeWindowClose();
+}
+
+/** 关闭确认「取消」：仅关弹窗，窗口与页签保持不动。 */
+function onCloseConfirmCancel() {
+  queryStore.cancelClosePendingTab();
+}
+
+/** 关闭确认「放弃修改」：强制关闭页签（丢弃未保存内容）并销毁窗口。 */
+async function onCloseConfirmDiscard() {
+  const id = queryStore.pendingCloseTabId;
+  queryStore.forceClosePendingTab();
+  if (id && !queryStore.tabs.some((item) => item.id === id)) await finalizeWindowClose();
+}
+
+/** 关闭确认「保存」：按页签类型走对应保存路径，保存成功后关闭窗口；失败/取消则中止关闭。 */
+async function onCloseConfirmSave() {
+  const id = queryStore.saveAndClosePendingTab();
+  if (!id) return;
+  const tabValue = queryStore.tabs.find((item) => item.id === id);
+  if (!tabValue) return;
+  if (await saveTabForClose(tabValue)) {
+    queryStore.closeTab(id, { force: true });
+    await finalizeWindowClose();
   }
 }
 
@@ -346,17 +429,18 @@ async function closeWindowDirectly() {
 
 const showSaveSqlDialog = ref(false);
 const saveSqlName = ref("");
+/** 关闭确认「保存」且无已存 SQL 文件时置位：保存对话框保存成功后继续关闭窗口。 */
+let closeAfterSaveRequested = false;
 
-async function saveActiveSql() {
+/** 保存当前页签。返回 saved/failed/dialog（dialog = 已打开保存对话框，结果待用户确认）。 */
+async function saveActiveSql(options: { closeAfterSave?: boolean } = {}): Promise<"saved" | "failed" | "dialog"> {
   const tabValue = tab.value;
-  if (!tabValue) return;
+  if (!tabValue) return "failed";
   if (tabValue.objectSource) {
-    await saveActiveObjectSource(tabValue);
-    return;
+    return (await saveActiveObjectSource(tabValue)) ? "saved" : "failed";
   }
   if (tabValue.externalSqlPath) {
-    await saveExternalSqlTab(tabValue);
-    return;
+    return (await saveExternalSqlTab(tabValue)) ? "saved" : "failed";
   }
   const existing = tabValue.savedSqlId ? savedSqlStore.getFile(tabValue.savedSqlId) : undefined;
   if (existing) {
@@ -376,13 +460,30 @@ async function saveActiveSql() {
       queryStore.markTabClean(tabValue);
       toast(t("savedSql.saved"), 2000);
       void broadcastDetachedPanelMessage({ action: "saved-sql-changed" });
+      return "saved";
     } catch (error) {
       toast(t("savedSql.saveFailed", { message: savedSqlErrorMessage(error, t) }), 5000);
+      return "failed";
     }
-    return;
   }
+  closeAfterSaveRequested = options.closeAfterSave === true;
   saveSqlName.value = (tabValue.title.trim() || "query").replace(/\s+/g, "_") + ".sql";
   showSaveSqlDialog.value = true;
+  return "dialog";
+}
+
+/** 关闭确认中的「保存」：结构页签走结构编辑器保存，其余走 SQL 保存。返回是否已保存（可继续关闭）。 */
+async function saveTabForClose(tabValue: QueryTab): Promise<boolean> {
+  if (tabValue.mode === "structure") {
+    return (await contentAreaRef.value?.applyTableStructureChanges?.()) === true;
+  }
+  return (await saveActiveSql({ closeAfterSave: true })) === "saved";
+}
+
+/** 保存对话框关闭（含取消）：中止「保存后关闭」。 */
+function onSaveSqlDialogOpenChange(open: boolean) {
+  showSaveSqlDialog.value = open;
+  if (!open) closeAfterSaveRequested = false;
 }
 
 async function confirmSaveSqlToLibrary() {
@@ -405,31 +506,39 @@ async function confirmSaveSqlToLibrary() {
     showSaveSqlDialog.value = false;
     toast(t("savedSql.saved"), 2000);
     void broadcastDetachedPanelMessage({ action: "saved-sql-changed" });
+    // 关闭确认链路：保存成功后继续关闭窗口。
+    if (closeAfterSaveRequested) {
+      closeAfterSaveRequested = false;
+      queryStore.closeTab(tabValue.id, { force: true });
+      await finalizeWindowClose();
+    }
   } catch (error) {
     toast(t("savedSql.saveFailed", { message: savedSqlErrorMessage(error, t) }), 5000);
   }
 }
 
-async function saveExternalSqlTab(tabValue: QueryTab) {
-  if (!tabValue.externalSqlPath || !isTauriRuntime()) return;
+async function saveExternalSqlTab(tabValue: QueryTab): Promise<boolean> {
+  if (!tabValue.externalSqlPath || !isTauriRuntime()) return false;
   try {
     const result = await api.writeExternalSqlFile(tabValue.externalSqlPath, tabValue.sql, {});
     if (result.kind !== "written") {
       toast(t("externalSqlFile.checkFailed", { message: t("externalSqlFile.changedAgain") }), 5000);
-      return;
+      return false;
     }
     rememberExternalSqlFileTarget(tabValue.externalSqlPath, { connectionId: tabValue.connectionId, database: tabValue.database, catalog: tabValue.catalog });
     queryStore.markExternalSqlFileSaved(tabValue.id, result.version);
     toast(t("savedSql.saved"), 2000);
+    return true;
   } catch (error: any) {
     toast(t("toolbar.sqlSaveFailed", { message: error?.message || String(error) }), 5000);
+    return false;
   }
 }
 
-async function saveActiveObjectSource(tabValue: QueryTab): Promise<void> {
+async function saveActiveObjectSource(tabValue: QueryTab): Promise<boolean> {
   const connection = connectionStore.getConfig(tabValue.connectionId);
   const source = tabValue.objectSource;
-  if (!connection || !source) return;
+  if (!connection || !source) return false;
   try {
     const databaseType = effectiveDatabaseTypeForConnection(connection) ?? connection.db_type;
     const statements = await buildExecutableObjectSourceStatements({
@@ -451,14 +560,16 @@ async function saveActiveObjectSource(tabValue: QueryTab): Promise<void> {
           return true;
         },
       });
-      if (!saved) return;
+      if (!saved) return false;
     } else {
       await executeObjectSourceSave(tabValue.connectionId, tabValue.database, databaseType, statements, source.schema || tabValue.schema);
     }
     queryStore.markTabClean(tabValue);
     toast(t("objects.sourceSaved"), 2000);
+    return true;
   } catch (error: any) {
     toast(t("objects.sourceSaveFailed", { message: error?.message || String(error) }), 5000);
+    return false;
   }
 }
 
@@ -651,17 +762,16 @@ onMounted(async () => {
   if (isTauriRuntime()) {
     const win = await currentWindow();
     unlistenWindowEvents.push(await win.onMoved(schedulePlacementSave), await win.onResized(schedulePlacementSave));
-    // 系统级关闭路径（Alt+F4/任务栏关闭）转为合并回主窗口——当前已停用：关闭直接销毁窗口
-    // （registry 崩溃保护仍在，未 dock 的页签下次启动恢复回主窗口）。
-    // 保留以下实现，后续可能扩展为设置项（独立窗口关闭行为：合并回主窗口 / 直接关闭）。
-    // unlistenWindowEvents.push(
-    //   await win.onCloseRequested((event) => {
-    //     if (tabId.value && !dockRequested) {
-    //       event.preventDefault();
-    //       void dockToMainWindow();
-    //     }
-    //   }),
-    // );
+    // 系统级关闭路径（Alt+F4/任务栏关闭/macOS 红绿灯）与标题栏 X 统一走 requestCloseWindow
+    // （复用 dirty-tab 确认策略；确认关闭才移除 registry 并销毁窗口）。
+    // dock 合并时主窗口经 close() 关闭本窗口——dockRequested 放行。
+    unlistenWindowEvents.push(
+      await win.onCloseRequested((event) => {
+        if (dockRequested) return;
+        event.preventDefault();
+        requestCloseWindow();
+      }),
+    );
   }
 
   if (windowMode?.kind === "tab") {
@@ -702,7 +812,7 @@ onBeforeUnmount(() => {
           <Button variant="ghost" size="icon" class="h-5 w-5" :title="t('panelDetach.dock')" :aria-label="t('panelDetach.dock')" @click="dockToMainWindow">
             <PictureInPicture2 class="h-3 w-3" />
           </Button>
-          <Button variant="ghost" size="icon" class="h-5 w-5" :aria-label="t('common.close')" :title="t('common.close')" @click="closeWindowDirectly">
+          <Button variant="ghost" size="icon" class="h-5 w-5" :aria-label="t('common.close')" :title="t('common.close')" @click="requestCloseWindow">
             <X class="h-3 w-3" />
           </Button>
         </div>
@@ -831,15 +941,41 @@ onBeforeUnmount(() => {
         @update:open="showSqlParameterDialog = $event"
         @execute="onSqlParametersConfirm"
       />
-      <Dialog :open="showSaveSqlDialog" @update:open="showSaveSqlDialog = $event">
+      <Dialog :open="showSaveSqlDialog" @update:open="onSaveSqlDialogOpenChange">
         <DialogContent class="max-w-md">
           <DialogHeader>
             <DialogTitle>{{ t("savedSql.saveToLibrary") }}</DialogTitle>
           </DialogHeader>
           <Input v-model="saveSqlName" :placeholder="t('savedSql.fileName')" @keydown.enter="confirmSaveSqlToLibrary" />
           <DialogFooter>
-            <Button variant="outline" @click="showSaveSqlDialog = false">{{ t("common.cancel") }}</Button>
+            <Button variant="outline" @click="onSaveSqlDialogOpenChange(false)">{{ t("common.cancel") }}</Button>
             <Button :disabled="!saveSqlName.trim()" @click="confirmSaveSqlToLibrary">{{ t("common.save") }}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <!-- 未保存关闭确认：复用主窗口 dirty-tab 策略（保存/放弃/取消），标题栏 X 与系统级关闭共用 -->
+      <Dialog
+        :open="queryStore.showCloseConfirm"
+        @update:open="
+          (open: boolean) => {
+            if (!open) onCloseConfirmCancel();
+          }
+        "
+      >
+        <DialogContent class="min-w-0 sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle class="flex items-center gap-2">
+              <AlertTriangle class="h-5 w-5 text-amber-500" />
+              {{ t("editor.unsavedChangesTitle") }}
+            </DialogTitle>
+          </DialogHeader>
+          <div class="max-h-120 min-h-0 min-w-0 overflow-y-auto">
+            <p class="wrap-anywhere text-sm text-muted-foreground">{{ t("editor.unsavedChangesMessage", { count: 1, title: displayTitle }) }}</p>
+          </div>
+          <DialogFooter class="min-w-0 sm:flex-wrap">
+            <Button variant="outline" @click="onCloseConfirmCancel">{{ t("common.cancel") }}</Button>
+            <Button variant="secondary" class="border-border" @click="onCloseConfirmDiscard">{{ t("editor.discardChanges") }}</Button>
+            <Button @click="onCloseConfirmSave">{{ t("savedSql.save") }}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -15,8 +15,9 @@
 import { safeLocalStorageGet, safeLocalStorageRemove, safeLocalStorageSet } from "@/lib/backend/safeStorage";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
 import { DETACHED_TAB_PARAM, DETACHED_TAB_SHELL_PARAM } from "@/lib/detached/detachedWindowContext";
-import { MAIN_WINDOW_LABEL, loadDetachedWindowPlacement, openDetachedWebviewWindow, sendDetachedPanelMessage } from "@/lib/detached/detachedPanel";
+import { MAIN_WINDOW_LABEL, loadDetachedWindowPlacement, openDetachedWebviewWindow, sendDetachedPanelMessageOrThrow } from "@/lib/detached/detachedPanel";
 import { restoreOpenTabsPayload, serializeOpenTabs, type SavedOpenTab } from "@/lib/app/openTabsPersistence";
+import type { SerializedDataGridPendingSnapshot } from "@/composables/useDataGridEditor";
 import type { QueryTab } from "@/types/database";
 
 // ---------------------------------------------------------------------------
@@ -24,14 +25,16 @@ import type { QueryTab } from "@/types/database";
 // ---------------------------------------------------------------------------
 
 /**
- * 分离页签快照：在 open-tabs 持久化格式之上，附加结构编辑草稿、编辑器视口等
- * open-tabs 持久化不覆盖、但分离/合并往返必须保留的字段。
+ * 分离页签快照：在 open-tabs 持久化格式之上，附加结构编辑草稿、编辑器视口、
+ * DataGrid 待保存状态等 open-tabs 持久化不覆盖、但分离/合并往返必须保留的字段。
  */
 export type DetachedTabSnapshot = SavedOpenTab & {
   structureDraft?: QueryTab["structureDraft"];
   tableInfoTab?: QueryTab["tableInfoTab"];
   editorViewport?: QueryTab["editorViewport"];
   editorSelection?: QueryTab["editorSelection"];
+  /** DataGrid 未保存的编辑状态（newRows/dirtyRows/deletedRows 等，按 cacheKey 分组）。 */
+  dataGridPending?: Record<string, SerializedDataGridPendingSnapshot>;
 };
 
 /** 序列化页签为分离快照（结果数据不内嵌，经 resultCacheKey 引用 IndexedDB 结果缓存）。 */
@@ -234,6 +237,61 @@ export async function ensureWarmDetachedTabShell(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// adopt 握手：子窗口恢复/渲染完成后回执，主窗口确认成功才 finalize（移除主窗口页签）
+// ---------------------------------------------------------------------------
+
+/** 子窗口 adopt 回执超时：覆盖冷启动 bundle 加载 + 连接配置初始化。 */
+export const DETACHED_TAB_ADOPT_ACK_TIMEOUT_MS = 20_000;
+
+interface PendingAdoptAck {
+  label: string;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const pendingAdoptAcks = new Map<string, PendingAdoptAck>();
+
+function settleAdoptAck(tabId: string, settle: (pending: PendingAdoptAck) => void): void {
+  const pending = pendingAdoptAcks.get(tabId);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  pendingAdoptAcks.delete(tabId);
+  settle(pending);
+}
+
+/** 子窗口 adopt 成功回执（App.vue 收到 detached-tab-adopted 时调用）。 */
+export function resolveDetachedTabAdoptAck(tabId: string): void {
+  settleAdoptAck(tabId, (pending) => pending.resolve());
+}
+
+/** 子窗口 adopt 失败/窗口创建失败/回滚中止时拒绝等待（幂等：无等待器时 no-op）。 */
+export function rejectDetachedTabAdoptAck(tabId: string, reason: string): void {
+  settleAdoptAck(tabId, (pending) => pending.reject(new Error(reason)));
+}
+
+/**
+ * 等待子窗口 adopt 回执。必须先于窗口创建/assign 发送注册——tauri://error 等失败
+ * 可能早于 await 返回触发，后注册会漏掉快速失败退化为整段超时。
+ */
+export function waitForDetachedTabAdoptAck(tabId: string, label: string): Promise<void> {
+  // 同一页签的重复分离：旧等待按取代失败处理，避免悬挂。
+  settleAdoptAck(tabId, (pending) => pending.reject(new Error("superseded by a new detach attempt")));
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingAdoptAcks.delete(tabId);
+      reject(new Error(`adopt ack timeout after ${DETACHED_TAB_ADOPT_ACK_TIMEOUT_MS}ms`));
+    }, DETACHED_TAB_ADOPT_ACK_TIMEOUT_MS);
+    pendingAdoptAcks.set(tabId, { label, resolve, reject, timer });
+  });
+}
+
+/** 是否有进行中的分离（adopt 回执未达）。 */
+export function hasPendingDetachedTabAdoptAck(tabId: string): boolean {
+  return pendingAdoptAcks.has(tabId);
+}
+
 export interface DetachedTabOpenPlacement {
   /** 分离瞬间的鼠标屏幕逻辑坐标（拖拽/右键触发位置）。 */
   x?: number;
@@ -242,15 +300,21 @@ export interface DetachedTabOpenPlacement {
 
 /**
  * 打开（或聚焦已存在的）页签子窗口。
- * 快照随调用写入 registry（子窗口从 registry 读取），时序保证子窗口读到时快照已就绪；
- * 优先复用预热 shell（秒开），否则新建窗口（慢路径）。
- * 返回窗口 label；失败时清理 registry 并返回 null（调用方负责恢复页签）。
+ * 快照随调用写入 registry（子窗口从 registry 读取）；优先复用预热 shell（秒开），否则新建窗口（慢路径）。
+ * 两种路径都等待子窗口 adopt 回执（含超时回滚），确认成功后调用方才 finalize 移除主窗口页签。
+ * 返回窗口 label；失败时清理 registry 并关闭半成品窗口，返回 null（调用方负责恢复页签）。
  */
 export async function openDetachedTabWindow(options: { tabId: string; title: string; snapshot: DetachedTabSnapshot; placement?: DetachedTabOpenPlacement }): Promise<string | null> {
   if (!isTauriRuntime()) return null;
   const { tabId, title, snapshot } = options;
   const placement = options.placement ?? {};
   const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+
+  // 分离进行中（adopt 回执未达）：避免重复创建/清理打挂前一次调用。
+  if (hasPendingDetachedTabAdoptAck(tabId)) {
+    console.warn("[detached-tab] detach already in flight", tabId);
+    return null;
+  }
 
   // 该页签已在分离中：聚焦既有窗口。
   const existingEntry = readDetachedTabEntry(tabId);
@@ -269,23 +333,28 @@ export async function openDetachedTabWindow(options: { tabId: string; title: str
     removeDetachedTabEntry(tabId);
   }
 
-  // 快路径：分配预热 shell（label 先确定，registry 写完再发 assign）。
+  // 快路径：分配预热 shell（label 先确定，registry 写完再发 assign，最后等 adopt 回执）。
   if (warmShell?.ready) {
     const shell = warmShell;
     warmShell = null;
+    const adoptAck = waitForDetachedTabAdoptAck(tabId, shell.label);
     try {
       const win = await WebviewWindow.getByLabel(shell.label);
       if (!win) throw new Error("warm shell window missing");
       writeDetachedTabEntry(tabId, { snapshot, label: shell.label, title, detachedAt: Date.now(), updatedAt: Date.now() });
       // 标题更新失败不阻断分配（标题仅影响任务栏/Alt+Tab 展示）。
       await win.setTitle(`DBX - ${title}`).catch((error) => console.warn("[detached-tab] set title failed", error));
-      await sendDetachedPanelMessage(shell.label, { action: "detached-tab-assign", tabId, x: placement.x, y: placement.y });
+      // assign 是关键握手消息：发送失败立即回滚，不等超时。
+      await sendDetachedPanelMessageOrThrow(shell.label, { action: "detached-tab-assign", tabId, x: placement.x, y: placement.y });
+      await adoptAck;
       // 预热窗口被消耗，后台补充下一个。
       void ensureWarmDetachedTabShell();
       return shell.label;
     } catch (error) {
       console.error("[detached-tab] assign warm shell failed", error);
+      rejectDetachedTabAdoptAck(tabId, "detach aborted");
       removeDetachedTabEntry(tabId);
+      await closeDetachedTabWindow(shell.label);
       void ensureWarmDetachedTabShell();
       return null;
     }
@@ -293,9 +362,10 @@ export async function openDetachedTabWindow(options: { tabId: string; title: str
 
   // 慢路径：新建窗口（位置/尺寸按记忆或鼠标位置创建即定位）。
   const label = detachedTabWindowLabel(tabId);
+  writeDetachedTabEntry(tabId, { snapshot, label, title, detachedAt: Date.now(), updatedAt: Date.now() });
+  const adoptAck = waitForDetachedTabAdoptAck(tabId, label);
   try {
     const remembered = placement.x === undefined || placement.y === undefined ? await loadDetachedWindowPlacement(detachedTabPlacementKey(tabId)) : null;
-    writeDetachedTabEntry(tabId, { snapshot, label, title, detachedAt: Date.now(), updatedAt: Date.now() });
     const opened = await openDetachedWebviewWindow({
       label,
       title: `DBX - ${title}`,
@@ -306,15 +376,17 @@ export async function openDetachedTabWindow(options: { tabId: string; title: str
       defaultHeight: 720,
       minWidth: 480,
       minHeight: 360,
+      // 窗口创建失败（tauri://error）立刻拒绝回执等待，避免整段超时。
+      onCreateError: (error) => rejectDetachedTabAdoptAck(tabId, `create window failed: ${String(error)}`),
     });
-    if (!opened) {
-      removeDetachedTabEntry(tabId);
-      return null;
-    }
+    if (!opened) throw new Error("window not opened");
+    await adoptAck;
     return label;
   } catch (error) {
-    console.error("[detached-tab] create window failed", error);
+    console.error("[detached-tab] create/adopt window failed", error);
+    rejectDetachedTabAdoptAck(tabId, "detach aborted");
     removeDetachedTabEntry(tabId);
+    await closeDetachedTabWindow(label);
     return null;
   }
 }
@@ -331,7 +403,7 @@ export async function closeDetachedTabWindow(label: string): Promise<void> {
   }
 }
 
-/** 通知主窗口合并页签（子窗口调用；最新快照需已写入 registry）。 */
+/** 通知主窗口合并页签（子窗口调用；最新快照需已写入 registry）。发送失败抛错，调用方重置 dock 状态。 */
 export async function requestDockDetachedTab(tabId: string): Promise<void> {
-  await sendDetachedPanelMessage(MAIN_WINDOW_LABEL, { action: "detached-tab-dock", tabId });
+  await sendDetachedPanelMessageOrThrow(MAIN_WINDOW_LABEL, { action: "detached-tab-dock", tabId });
 }

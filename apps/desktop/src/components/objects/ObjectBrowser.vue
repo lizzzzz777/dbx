@@ -124,7 +124,7 @@ import { cacheObjectBrowserRows, createObjectBrowserRowsCacheWriteToken, getCach
 import { createObjectBrowserRowsLoadGuard, type ObjectBrowserRowsLoadHandle } from "@/lib/table/objectBrowserRowsLoadGuard";
 import TableInfoPanel from "@/components/objects/TableInfoPanel.vue";
 import { MAIN_WINDOW_LABEL, closeDetachedPanelWindow, detachedPanelWindowLabel, isPanelDetached, openDetachedPanelWindow, sendDetachedPanelMessage, setPanelDetached, type TableInfoContextSnapshot } from "@/lib/detached/detachedPanel";
-import { detachTabToWindow } from "@/lib/detached/detachTabToWindow";
+import { detachTabFailureMessage, detachTabToWindow } from "@/lib/detached/detachTabToWindow";
 import { publishTableInfoContext, unpublishTableInfoContext } from "@/lib/detached/tableInfoContextRegistry";
 import { uuid } from "@/lib/common/utils";
 
@@ -1408,10 +1408,10 @@ function openStructureEditor(row: ObjectBrowserRow) {
 async function detachCreatedTabToSeparateWindow(tabId: string | undefined) {
   if (!tabId) return;
   try {
-    const label = await detachTabToWindow(tabId, t);
-    if (!label) {
+    const result = await detachTabToWindow(tabId, t);
+    if (!result.ok) {
       queryStore.revealPendingDetachTab(tabId);
-      toast(t("contextMenu.openInSeparateWindowFailed"), 5000);
+      toast(detachTabFailureMessage(result.reason, t), 5000);
     }
   } catch (error) {
     queryStore.revealPendingDetachTab(tabId);

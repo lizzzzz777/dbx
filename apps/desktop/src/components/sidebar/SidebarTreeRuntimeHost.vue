@@ -163,7 +163,7 @@ import { runBatchTableDrop } from "@/lib/table/batchTableDrop";
 import { buildSidebarDdlTemplateSql, sidebarDdlTargetsForExecutionContext } from "@/lib/sidebar/sidebarDdlTemplate";
 import { sidebarStructureExportTargets } from "@/lib/sidebar/sidebarExportRuntime";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
-import { detachTabToWindow } from "@/lib/detached/detachTabToWindow";
+import { detachTabFailureMessage, detachTabToWindow } from "@/lib/detached/detachTabToWindow";
 import { openTableTarget } from "@/composables/useNavigationTargets";
 import { copyToClipboard } from "@/lib/common/clipboard";
 import { rankSavedSqlHistory, type SavedSqlHistoryScope } from "@/lib/savedSql/savedSqlHistory";
@@ -2181,10 +2181,10 @@ const canOpenInSeparateWindow = computed(() => isTauriRuntime());
 async function detachCreatedTabToSeparateWindow(tabId: string | undefined) {
   if (!tabId) return;
   try {
-    const label = await detachTabToWindow(tabId, t);
-    if (!label) {
+    const result = await detachTabToWindow(tabId, t);
+    if (!result.ok) {
       queryStore.revealPendingDetachTab(tabId);
-      toast(t("contextMenu.openInSeparateWindowFailed"), 5000);
+      toast(detachTabFailureMessage(result.reason, t), 5000);
     }
   } catch (error) {
     queryStore.revealPendingDetachTab(tabId);

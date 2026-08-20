@@ -2668,6 +2668,8 @@ export default withEnglishFallback({
     unfixTab: "Desafixar aba",
     openInSeparateWindow: "Abrir em janela separada",
     openInSeparateWindowFailed: "Falha ao abrir a janela separada. A aba permanece na janela principal.",
+    detachTabExecuting: "A aba está executando uma consulta ou explain. Aguarde a conclusão ou interrompa antes de separar.",
+    detachTabTransaction: "A aba tem uma transação não confirmada. Confirme ou reverta antes de separar.",
     refreshTab: "Atualizar Dados",
     renameTab: "Renomear Aba",
     duplicateTab: "Duplicar Aba",

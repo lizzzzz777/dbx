@@ -19,7 +19,7 @@ import { connectionColor, isConnectionReadonly, tabDisplayTitle, tabTooltipLines
 import { hexToRgba } from "@/lib/common/color";
 import { copyToClipboard } from "@/lib/common/clipboard";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
-import { openDetachedTabWindow } from "@/lib/detached/detachedTabs";
+import { detachTabFailureMessage, detachTabToWindow as detachTabToWindowShared } from "@/lib/detached/detachTabToWindow";
 import { useToast } from "@/composables/useToast";
 import type { QueryTab } from "@/types/database";
 
@@ -129,20 +129,14 @@ function canRenameTab(tab: QueryTab) {
 }
 
 /**
- * 将页签移入独立子窗口。prepare（结果写缓存+快照，页签不动）→ 子窗口创建/分配
- * 成功后 finalize 移除；prepare 不改动页签，失败时天然无损，无需回滚。
+ * 将页签移入独立子窗口。prepare（结果写缓存+快照，页签不动）→ 子窗口 adopt 回执
+ * 确认后 finalize 移除；执行中查询/未提交事务等不可迁移状态拒绝分离并明确提示。
  */
 async function detachTabToWindow(tab: QueryTab) {
   if (!isTauriRuntime()) return;
   try {
-    const snapshot = await queryStore.prepareTabDetachSnapshot(tab.id);
-    if (!snapshot) return;
-    const label = await openDetachedTabWindow({ tabId: tab.id, title: tabDisplayTitle(tab, t), snapshot });
-    if (!label) {
-      toast(t("contextMenu.openInSeparateWindowFailed"), 5000);
-      return;
-    }
-    queryStore.finalizeTabDetach(tab.id);
+    const result = await detachTabToWindowShared(tab.id, t);
+    if (!result.ok) toast(detachTabFailureMessage(result.reason, t), 5000);
   } catch (error) {
     console.error("[detached-tab] open failed", error);
     toast(error instanceof Error ? error.message : String(error), 5000);

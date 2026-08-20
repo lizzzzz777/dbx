@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  DETACHED_TAB_ADOPT_ACK_TIMEOUT_MS,
   getDetachedTabModeFromLocation,
+  hasPendingDetachedTabAdoptAck,
   readDetachedTabEntry,
+  rejectDetachedTabAdoptAck,
   removeDetachedTabEntry,
+  resolveDetachedTabAdoptAck,
   updateDetachedTabSnapshot,
+  waitForDetachedTabAdoptAck,
   writeDetachedTabEntry,
   listDetachedTabEntries,
   clearDetachedTabsRegistry,
@@ -148,5 +153,72 @@ describe("detachedTabs snapshot round-trip", () => {
     expect(restored?.resultCacheKey).toBe("cache-key-1");
     expect(restored?.resultCacheState).toBe("disk");
     expect(restored?.resultEvicted).toBe(true);
+  });
+
+  it("keeps DataGrid pending changes attached to the snapshot through JSON round-trip", () => {
+    // dataGridPending 由调用方在序列化后附加（窗口级缓存现取）；快照必须能承载它往返。
+    const snapshot = makeSnapshot({
+      dataGridPending: {
+        "tab-1": {
+          newRows: [["Ada", null]],
+          newRowMeta: [{ token: 1, placement: null, sourceIndex: undefined, editedColumns: [0] }],
+          dirtyRows: [[0, [[1, "Grace"]]]],
+          deletedRows: [2],
+          editingCell: null,
+          transactionActive: true,
+          columnCount: 2,
+          rowCount: 3,
+        },
+      },
+    });
+    const roundTripped = JSON.parse(JSON.stringify(snapshot)) as DetachedTabSnapshot;
+    expect(roundTripped.dataGridPending?.["tab-1"]?.newRows).toEqual([["Ada", null]]);
+    expect(roundTripped.dataGridPending?.["tab-1"]?.dirtyRows).toEqual([[0, [[1, "Grace"]]]]);
+    expect(roundTripped.dataGridPending?.["tab-1"]?.deletedRows).toEqual([2]);
+    expect(roundTripped.dataGridPending?.["tab-1"]?.transactionActive).toBe(true);
+  });
+});
+
+describe("detached tab adopt ack", () => {
+  it("resolves the pending wait when the child window confirms adoption", async () => {
+    const wait = waitForDetachedTabAdoptAck("tab-1", "panel-tab-tab-1");
+    expect(hasPendingDetachedTabAdoptAck("tab-1")).toBe(true);
+    resolveDetachedTabAdoptAck("tab-1");
+    await expect(wait).resolves.toBeUndefined();
+    expect(hasPendingDetachedTabAdoptAck("tab-1")).toBe(false);
+  });
+
+  it("rejects the pending wait when the child window reports adopt failure", async () => {
+    const wait = waitForDetachedTabAdoptAck("tab-1", "panel-tab-tab-1");
+    rejectDetachedTabAdoptAck("tab-1", "restore-failed");
+    await expect(wait).rejects.toThrow("restore-failed");
+    expect(hasPendingDetachedTabAdoptAck("tab-1")).toBe(false);
+  });
+
+  it("rejects the pending wait on timeout so the caller can roll back", async () => {
+    vi.useFakeTimers();
+    try {
+      const wait = waitForDetachedTabAdoptAck("tab-1", "panel-tab-tab-1");
+      const assertion = expect(wait).rejects.toThrow(/timeout/);
+      await vi.advanceTimersByTimeAsync(DETACHED_TAB_ADOPT_ACK_TIMEOUT_MS + 1);
+      await assertion;
+      expect(hasPendingDetachedTabAdoptAck("tab-1")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("supersedes a stale wait when the same tab is detached again", async () => {
+    const first = waitForDetachedTabAdoptAck("tab-1", "panel-tab-tab-1");
+    const superseded = expect(first).rejects.toThrow(/superseded/);
+    const second = waitForDetachedTabAdoptAck("tab-1", "panel-tab-tab-1");
+    await superseded;
+    resolveDetachedTabAdoptAck("tab-1");
+    await expect(second).resolves.toBeUndefined();
+  });
+
+  it("ignores late or unknown acks without a pending wait", () => {
+    expect(() => resolveDetachedTabAdoptAck("missing")).not.toThrow();
+    expect(() => rejectDetachedTabAdoptAck("missing", "late")).not.toThrow();
   });
 });

@@ -165,6 +165,10 @@ export type DetachedPanelMessage =
   | { action: "detached-tab-shell-ready"; label: string }
   /** 主窗口 → 指定 shell 子窗口：分配分离页签（快照已写入 registry，子窗口按 tabId 读取并显示）。x/y 为分离瞬间的鼠标位置（缺省时子窗口用记忆位置）。 */
   | { action: "detached-tab-assign"; tabId: string; x?: number; y?: number }
+  /** 分离页签子窗口 → 主窗口：页签已从 registry 恢复并完成首帧渲染（主窗口据此 finalize 移除主窗口页签）。 */
+  | { action: "detached-tab-adopted"; tabId: string }
+  /** 分离页签子窗口 → 主窗口：页签恢复失败（registry 缺失/快照损坏），子窗口已自毁，主窗口回滚。 */
+  | { action: "detached-tab-adopt-failed"; tabId: string; reason?: string }
   /** 分离页签子窗口 → 主窗口：合并回主窗口（最新快照已写入 registry）。 */
   | { action: "detached-tab-dock"; tabId: string }
   /** 分离页签子窗口 → 主窗口：在主窗口打开 SQL 文件 / 导入结果归档。 */
@@ -216,6 +220,18 @@ export async function sendDetachedPanelMessage(targetLabel: string, message: Det
   } catch (error) {
     console.error("[detached-panel] send failed", error);
   }
+}
+
+/**
+ * 定向发送面板事件，失败时抛错（不吞错）。
+ * 仅用于分离页签的关键握手消息（assign/adopted/adopt-failed/dock）——发送失败时
+ * 调用方必须立刻回滚/自毁，而不是静默等待超时。
+ */
+export async function sendDetachedPanelMessageOrThrow(targetLabel: string, message: DetachedPanelMessage): Promise<void> {
+  if (!isTauriRuntime()) throw new Error("[detached-panel] send requires tauri runtime");
+  const { emitTo } = await import("@tauri-apps/api/event");
+  const envelope: DetachedPanelEnvelope = { source: await currentWindowLabel(), message };
+  await emitTo(targetLabel, DETACHED_PANEL_EVENT, envelope);
 }
 
 /**
@@ -418,6 +434,8 @@ export interface DetachedWebviewWindowOptions {
   defaultHeight?: number;
   minWidth?: number;
   minHeight?: number;
+  /** 窗口创建失败（tauri://error）回调：调用方可据此快速失败（默认仅记日志）。 */
+  onCreateError?: (error: unknown) => void;
 }
 
 /**
@@ -476,6 +494,7 @@ export async function openDetachedWebviewWindow(options: DetachedWebviewWindowOp
   });
   window.once("tauri://error", (error: unknown) => {
     console.error("[detached-panel] create window failed", error);
+    options.onCreateError?.(error);
   });
   return true;
 }
