@@ -161,6 +161,8 @@ export type DetachedPanelMessage =
   | { action: "object-browser-refresh-data-tabs"; connectionId: string; database: string; catalog?: string; schema?: string; schemaCandidates?: Array<string | undefined>; tableName: string }
   /** 主窗口 → 所有子窗口：应用设置（主题/语言/缩放）已变更，子窗口从持久层重读并应用。uiScale 随消息携带，避免与异步保存竞态。 */
   | { action: "app-settings-sync"; uiScale?: number }
+  /** 普通面板子窗口 → 主窗口：监听器、首帧与窗口显示均已完成。 */
+  | { action: "detached-panel-ready"; panel: DetachedPanelId }
   /** 预热 shell 子窗口 → 广播：shell 已挂载并就绪待命（label 为自身窗口 label）。 */
   | { action: "detached-tab-shell-ready"; label: string }
   /** 主窗口 → 指定 shell 子窗口：分配分离页签（快照已写入 registry，子窗口按 tabId 读取并显示）。x/y 为分离瞬间的鼠标位置（缺省时子窗口用记忆位置）。 */
@@ -224,7 +226,7 @@ export async function sendDetachedPanelMessage(targetLabel: string, message: Det
 
 /**
  * 定向发送面板事件，失败时抛错（不吞错）。
- * 仅用于分离页签的关键握手消息（assign/adopted/adopt-failed/dock）——发送失败时
+ * 用于分离窗口的关键握手消息（ready/assign/adopted/adopt-failed/dock）——发送失败时
  * 调用方必须立刻回滚/自毁，而不是静默等待超时。
  */
 export async function sendDetachedPanelMessageOrThrow(targetLabel: string, message: DetachedPanelMessage): Promise<void> {
@@ -241,14 +243,60 @@ export async function sendDetachedPanelMessageOrThrow(targetLabel: string, messa
  * 子窗口再次消费，内容被后打开的窗口覆盖、且 dock 链作用在错误的 tabId 上导致
  * 窗口无法关闭/合并）。窗口作用域下广播（emit）与发向本窗口的定向（emitTo）均可收到。
  */
-export async function listenDetachedPanelMessages(handler: (message: DetachedPanelMessage) => void): Promise<() => void> {
+export async function listenDetachedPanelMessages(handler: (message: DetachedPanelMessage, sourceLabel: string) => void): Promise<() => void> {
   if (!isTauriRuntime()) return () => {};
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   const self = getCurrentWindow();
   return self.listen<DetachedPanelEnvelope>(DETACHED_PANEL_EVENT, (event) => {
     if (!event.payload || event.payload.source === self.label) return;
-    handler(event.payload.message);
+    handler(event.payload.message, event.payload.source);
   });
+}
+
+/** 普通面板启动就绪超时：覆盖 bundle 加载、store 初始化与首帧显示。 */
+export const DETACHED_PANEL_READY_TIMEOUT_MS = 20_000;
+
+interface PendingPanelReady {
+  label: string;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const pendingPanelReady = new Map<DetachedPanelId, PendingPanelReady>();
+const panelOpenAttempts = new Map<DetachedPanelId, Promise<boolean>>();
+
+function settlePanelReady(panel: DetachedPanelId, sourceLabel: string | undefined, settle: (pending: PendingPanelReady) => void): void {
+  const pending = pendingPanelReady.get(panel);
+  if (!pending || (sourceLabel !== undefined && pending.label !== sourceLabel)) return;
+  clearTimeout(pending.timer);
+  pendingPanelReady.delete(panel);
+  settle(pending);
+}
+
+/** 子窗口完成首帧显示后确认就绪；迟到或来自旧窗口的回执会被忽略。 */
+export function resolveDetachedPanelReady(panel: DetachedPanelId, sourceLabel: string): void {
+  settlePanelReady(panel, sourceLabel, (pending) => pending.resolve());
+}
+
+/** 创建失败、超时或回滚时拒绝等待。 */
+export function rejectDetachedPanelReady(panel: DetachedPanelId, reason: string, sourceLabel?: string): void {
+  settlePanelReady(panel, sourceLabel, (pending) => pending.reject(new Error(reason)));
+}
+
+export function waitForDetachedPanelReady(panel: DetachedPanelId, label: string): Promise<void> {
+  settlePanelReady(panel, undefined, (pending) => pending.reject(new Error("superseded by a new panel open attempt")));
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingPanelReady.delete(panel);
+      reject(new Error(`panel ready timeout after ${DETACHED_PANEL_READY_TIMEOUT_MS}ms`));
+    }, DETACHED_PANEL_READY_TIMEOUT_MS);
+    pendingPanelReady.set(panel, { label, resolve, reject, timer });
+  });
+}
+
+export function hasPendingDetachedPanelReady(panel: DetachedPanelId): boolean {
+  return pendingPanelReady.has(panel);
 }
 
 // ---------------------------------------------------------------------------
@@ -492,22 +540,79 @@ export async function openDetachedWebviewWindow(options: DetachedWebviewWindowOp
     visible: false,
     ...(x !== undefined && y !== undefined ? { x, y } : {}),
   });
-  window.once("tauri://error", (error: unknown) => {
-    console.error("[detached-panel] create window failed", error);
-    options.onCreateError?.(error);
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const unlisteners: Array<() => void> = [];
+    const finish = (created: boolean, error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      for (const unlisten of unlisteners) unlisten();
+      if (!created) {
+        console.error("[detached-panel] create window failed", error);
+        options.onCreateError?.(error);
+      }
+      resolve(created);
+    };
+    const register = (promise: Promise<() => void>) => {
+      void promise
+        .then((unlisten) => {
+          if (settled) unlisten();
+          else unlisteners.push(unlisten);
+        })
+        .catch((error) => finish(false, error));
+    };
+    const timer = setTimeout(() => finish(false, new Error("window create timeout")), DETACHED_PANEL_READY_TIMEOUT_MS);
+    register(window.once("tauri://created", () => finish(true)));
+    register(window.once("tauri://error", (error: unknown) => finish(false, error)));
   });
-  return true;
 }
 
-/** 打开（或聚焦已存在的）面板子窗口。 */
-export async function openDetachedPanelWindow(panel: DetachedPanelId, placement: DetachedWindowPlacement = {}): Promise<void> {
-  await openDetachedWebviewWindow({
-    label: detachedPanelWindowLabel(panel),
-    title: `DBX - ${PANEL_WINDOW_TITLES[panel]}`,
-    url: `index.html?detached=${panel}`,
-    placementKey: panel,
-    placement,
+/** 执行一次面板窗口创建与就绪握手。 */
+async function openDetachedPanelWindowOnce(panel: DetachedPanelId, placement: DetachedWindowPlacement): Promise<boolean> {
+  const label = detachedPanelWindowLabel(panel);
+  const existing = await isDetachedPanelWindowOpen(panel);
+  const ready = existing ? null : waitForDetachedPanelReady(panel, label);
+  let opened = false;
+  try {
+    opened = await openDetachedWebviewWindow({
+      label,
+      title: `DBX - ${PANEL_WINDOW_TITLES[panel]}`,
+      url: `index.html?detached=${panel}`,
+      placementKey: panel,
+      placement,
+      onCreateError: (error) => rejectDetachedPanelReady(panel, `create window failed: ${String(error)}`, label),
+    });
+  } catch (error) {
+    console.error("[detached-panel] open window failed", error);
+    rejectDetachedPanelReady(panel, `open window failed: ${String(error)}`, label);
+  }
+  if (!opened) {
+    rejectDetachedPanelReady(panel, "window not opened", label);
+    await ready?.catch(() => {});
+    await closeDetachedPanelWindow(panel);
+    return false;
+  }
+  if (!ready) return true;
+  try {
+    await ready;
+    return true;
+  } catch (error) {
+    console.error("[detached-panel] window ready failed", error);
+    await closeDetachedPanelWindow(panel);
+    return false;
+  }
+}
+
+/** 打开（或聚焦已存在的）面板子窗口；同一面板的并发请求复用一次握手。 */
+export function openDetachedPanelWindow(panel: DetachedPanelId, placement: DetachedWindowPlacement = {}): Promise<boolean> {
+  const existingAttempt = panelOpenAttempts.get(panel);
+  if (existingAttempt) return existingAttempt;
+  const attempt = openDetachedPanelWindowOnce(panel, placement).finally(() => {
+    if (panelOpenAttempts.get(panel) === attempt) panelOpenAttempts.delete(panel);
   });
+  panelOpenAttempts.set(panel, attempt);
+  return attempt;
 }
 
 /** 关闭指定面板的子窗口（若存在）。 */

@@ -117,11 +117,13 @@ import {
   isPanelDetached,
   listenDetachedPanelMessages,
   openDetachedPanelWindow,
+  resolveDetachedPanelReady,
   sendDetachedPanelMessage,
   setPanelDetached,
   type AiPanelContextSnapshot,
   type DetachedPanelId,
   type DetachedPanelMessage,
+  type DetachedWindowPlacement,
 } from "@/lib/detached/detachedPanel";
 import { hideDetachGhost } from "@/lib/detached/detachGhostWindow";
 import { currentTableInfoContext, dockTableInfoToOwner } from "@/lib/detached/tableInfoContextRegistry";
@@ -861,12 +863,21 @@ function detachedPanelPlacement(panelId: DetachableRightSidebarPanelId) {
   return { width: Math.max(360, width), height: Math.max(480, Math.round(window.innerHeight * 0.8)) };
 }
 
+/** 打开分离面板；创建或初始化失败时恢复为主窗口内嵌面板。 */
+async function openDetachedRightSidebarPanel(panelId: DetachableRightSidebarPanelId, placement: DetachedWindowPlacement = detachedPanelPlacement(panelId)): Promise<boolean> {
+  const opened = await openDetachedPanelWindow(panelId, placement);
+  if (opened) return true;
+  setPanelDetached(panelId, false);
+  setRightSidebarPanelOpen(panelId, true);
+  return false;
+}
+
 function toggleRightSidebarPanel(panelId: RightSidebarPanelId) {
   if (isDetachablePanel(panelId) && isPanelDetached(panelId)) {
     // 分离模式：工具栏按钮切换独立窗口的开关。
     void (async () => {
       if (await isDetachedPanelWindowOpen(panelId)) await closeDetachedPanelWindow(panelId);
-      else await openDetachedPanelWindow(panelId, detachedPanelPlacement(panelId));
+      else await openDetachedRightSidebarPanel(panelId);
     })();
     return;
   }
@@ -875,7 +886,7 @@ function toggleRightSidebarPanel(panelId: RightSidebarPanelId) {
 
 function openRightSidebarPanel(panelId: RightSidebarPanelId) {
   if (isDetachablePanel(panelId) && isPanelDetached(panelId)) {
-    void openDetachedPanelWindow(panelId, detachedPanelPlacement(panelId));
+    void openDetachedRightSidebarPanel(panelId);
     return;
   }
   setRightSidebarPanelOpen(panelId, true);
@@ -895,7 +906,7 @@ async function detachPanelToWindow(panelId: DetachableRightSidebarPanelId, posit
   const placement = detachedPanelPlacement(panelId);
   setRightSidebarPanelOpen(panelId, false);
   setPanelDetached(panelId, true);
-  await openDetachedPanelWindow(panelId, {
+  await openDetachedRightSidebarPanel(panelId, {
     ...placement,
     x: Math.max(0, Math.round(position.x - placement.width / 2)),
     y: Math.max(0, Math.round(position.y - 16)),
@@ -995,18 +1006,21 @@ function restoreDetachedTabsOnStartup() {
   clearDetachedTabsRegistry();
 }
 
-function handleDetachedPanelMessage(message: DetachedPanelMessage) {
+function handleDetachedPanelMessage(message: DetachedPanelMessage, sourceLabel: string) {
   switch (message.action) {
+    case "detached-panel-ready":
+      resolveDetachedPanelReady(message.panel, sourceLabel);
+      break;
     case "detached-tab-shell-ready":
       markWarmShellReady(message.label);
       break;
     case "detached-tab-adopted":
       // 子窗口已恢复并渲染页签：openDetachedTabWindow 的回执等待据此完成，调用方 finalize。
-      resolveDetachedTabAdoptAck(message.tabId);
+      resolveDetachedTabAdoptAck(message.tabId, sourceLabel);
       break;
     case "detached-tab-adopt-failed":
       // 子窗口恢复失败并已自毁：回执等待按失败处理，触发回滚（页签保留在主窗口）。
-      rejectDetachedTabAdoptAck(message.tabId, message.reason ?? "adopt failed");
+      rejectDetachedTabAdoptAck(message.tabId, message.reason ?? "adopt failed", sourceLabel);
       break;
     case "detached-tab-dock":
       void handleDetachedTabDock(message.tabId);
@@ -1248,7 +1262,13 @@ async function dispatchDetachedAiAction(action: DetachedAiPendingAction): Promis
     return;
   }
   pendingDetachedAiActions.push(action);
-  await openDetachedPanelWindow("ai", detachedPanelPlacement("ai"));
+  const opened = await openDetachedRightSidebarPanel("ai");
+  if (!opened) {
+    for (const pending of pendingDetachedAiActions.splice(0)) {
+      if (pending.type === "trigger") invokeWhenAiReady((handle) => handle.triggerAction(pending.aiAction, pending.instruction));
+      else invokeWhenAiReady((handle) => handle.setPrompt(pending.text));
+    }
+  }
 }
 
 function invokeWhenAiReady(invoke: (handle: AiAssistantHandle) => void) {

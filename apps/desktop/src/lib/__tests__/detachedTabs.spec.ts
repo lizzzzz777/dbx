@@ -18,6 +18,7 @@ import {
   restoreDetachedTabSnapshot,
   type DetachedTabSnapshot,
 } from "@/lib/detached/detachedTabs";
+import { hasPendingDetachedPanelReady, rejectDetachedPanelReady, resolveDetachedPanelReady, waitForDetachedPanelReady } from "@/lib/detached/detachedPanel";
 import type { QueryTab } from "@/types/database";
 
 function stubLocationSearch(search: string) {
@@ -183,14 +184,14 @@ describe("detached tab adopt ack", () => {
   it("resolves the pending wait when the child window confirms adoption", async () => {
     const wait = waitForDetachedTabAdoptAck("tab-1", "panel-tab-tab-1");
     expect(hasPendingDetachedTabAdoptAck("tab-1")).toBe(true);
-    resolveDetachedTabAdoptAck("tab-1");
+    resolveDetachedTabAdoptAck("tab-1", "panel-tab-tab-1");
     await expect(wait).resolves.toBeUndefined();
     expect(hasPendingDetachedTabAdoptAck("tab-1")).toBe(false);
   });
 
   it("rejects the pending wait when the child window reports adopt failure", async () => {
     const wait = waitForDetachedTabAdoptAck("tab-1", "panel-tab-tab-1");
-    rejectDetachedTabAdoptAck("tab-1", "restore-failed");
+    rejectDetachedTabAdoptAck("tab-1", "restore-failed", "panel-tab-tab-1");
     await expect(wait).rejects.toThrow("restore-failed");
     expect(hasPendingDetachedTabAdoptAck("tab-1")).toBe(false);
   });
@@ -213,12 +214,37 @@ describe("detached tab adopt ack", () => {
     const superseded = expect(first).rejects.toThrow(/superseded/);
     const second = waitForDetachedTabAdoptAck("tab-1", "panel-tab-tab-1");
     await superseded;
-    resolveDetachedTabAdoptAck("tab-1");
+    resolveDetachedTabAdoptAck("tab-1", "panel-tab-tab-1");
     await expect(second).resolves.toBeUndefined();
   });
 
+  it("ignores an adopt ack from a stale window attempt", async () => {
+    const wait = waitForDetachedTabAdoptAck("tab-1", "panel-tab-current");
+    resolveDetachedTabAdoptAck("tab-1", "panel-tab-stale");
+    expect(hasPendingDetachedTabAdoptAck("tab-1")).toBe(true);
+    rejectDetachedTabAdoptAck("tab-1", "current failed", "panel-tab-current");
+    await expect(wait).rejects.toThrow("current failed");
+  });
+
   it("ignores late or unknown acks without a pending wait", () => {
-    expect(() => resolveDetachedTabAdoptAck("missing")).not.toThrow();
+    expect(() => resolveDetachedTabAdoptAck("missing", "panel-tab-missing")).not.toThrow();
     expect(() => rejectDetachedTabAdoptAck("missing", "late")).not.toThrow();
+  });
+});
+
+describe("detached panel ready ack", () => {
+  it("accepts only the current panel window label", async () => {
+    const wait = waitForDetachedPanelReady("ai", "panel-ai-current");
+    resolveDetachedPanelReady("ai", "panel-ai-stale");
+    expect(hasPendingDetachedPanelReady("ai")).toBe(true);
+    resolveDetachedPanelReady("ai", "panel-ai-current");
+    await expect(wait).resolves.toBeUndefined();
+  });
+
+  it("rejects panel readiness so callers can restore the inline panel", async () => {
+    const wait = waitForDetachedPanelReady("history", "panel-history");
+    rejectDetachedPanelReady("history", "create failed", "panel-history");
+    await expect(wait).rejects.toThrow("create failed");
+    expect(hasPendingDetachedPanelReady("history")).toBe(false);
   });
 });
