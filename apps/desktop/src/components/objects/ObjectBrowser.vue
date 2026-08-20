@@ -971,7 +971,11 @@ async function detachTableInfoPanel(position: { x: number; y: number }) {
   tableInfoDetached.value = true;
   setPanelDetached("tableInfo", true);
   publishTableInfoSnapshot();
-  await openDetachedPanelWindow("tableInfo", tableInfoDetachedPlacement(position));
+  const opened = await openDetachedPanelWindow("tableInfo", tableInfoDetachedPlacement(position));
+  if (!opened) {
+    tableInfoDetached.value = false;
+    setPanelDetached("tableInfo", false);
+  }
 }
 
 async function openTableInfo(row: ObjectBrowserRow, initialTab?: TableInfoTab) {
@@ -987,8 +991,10 @@ async function openTableInfo(row: ObjectBrowserRow, initialTab?: TableInfoTab) {
   // 分离模式：不内嵌展开，目标表推送给独立子窗口并确保窗口打开。
   if (tableInfoDetached.value) {
     publishTableInfoSnapshot();
-    await openDetachedPanelWindow("tableInfo", tableInfoDetachedPlacement());
-    return;
+    const opened = await openDetachedPanelWindow("tableInfo", tableInfoDetachedPlacement());
+    if (opened) return;
+    tableInfoDetached.value = false;
+    setPanelDetached("tableInfo", false);
   }
   // 面板已挂载时通过 ref 切换页签（未挂载时由 initialTab prop 生效）。
   if (initialTab) {

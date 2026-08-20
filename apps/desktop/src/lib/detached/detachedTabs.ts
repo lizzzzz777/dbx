@@ -255,22 +255,22 @@ interface PendingAdoptAck {
 
 const pendingAdoptAcks = new Map<string, PendingAdoptAck>();
 
-function settleAdoptAck(tabId: string, settle: (pending: PendingAdoptAck) => void): void {
+function settleAdoptAck(tabId: string, sourceLabel: string | undefined, settle: (pending: PendingAdoptAck) => void): void {
   const pending = pendingAdoptAcks.get(tabId);
-  if (!pending) return;
+  if (!pending || (sourceLabel !== undefined && pending.label !== sourceLabel)) return;
   clearTimeout(pending.timer);
   pendingAdoptAcks.delete(tabId);
   settle(pending);
 }
 
 /** 子窗口 adopt 成功回执（App.vue 收到 detached-tab-adopted 时调用）。 */
-export function resolveDetachedTabAdoptAck(tabId: string): void {
-  settleAdoptAck(tabId, (pending) => pending.resolve());
+export function resolveDetachedTabAdoptAck(tabId: string, sourceLabel: string): void {
+  settleAdoptAck(tabId, sourceLabel, (pending) => pending.resolve());
 }
 
 /** 子窗口 adopt 失败/窗口创建失败/回滚中止时拒绝等待（幂等：无等待器时 no-op）。 */
-export function rejectDetachedTabAdoptAck(tabId: string, reason: string): void {
-  settleAdoptAck(tabId, (pending) => pending.reject(new Error(reason)));
+export function rejectDetachedTabAdoptAck(tabId: string, reason: string, sourceLabel?: string): void {
+  settleAdoptAck(tabId, sourceLabel, (pending) => pending.reject(new Error(reason)));
 }
 
 /**
@@ -279,7 +279,7 @@ export function rejectDetachedTabAdoptAck(tabId: string, reason: string): void {
  */
 export function waitForDetachedTabAdoptAck(tabId: string, label: string): Promise<void> {
   // 同一页签的重复分离：旧等待按取代失败处理，避免悬挂。
-  settleAdoptAck(tabId, (pending) => pending.reject(new Error("superseded by a new detach attempt")));
+  settleAdoptAck(tabId, undefined, (pending) => pending.reject(new Error("superseded by a new detach attempt")));
   return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
       pendingAdoptAcks.delete(tabId);

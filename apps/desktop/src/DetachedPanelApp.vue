@@ -19,6 +19,7 @@ import {
   listenDetachedPanelMessages,
   saveDetachedWindowPlacement,
   sendDetachedPanelMessage,
+  sendDetachedPanelMessageOrThrow,
   type AiPanelContextSnapshot,
   type AiTabContext,
   type SavedSqlTabsSnapshot,
@@ -209,7 +210,13 @@ onMounted(async () => {
     void sendDetachedPanelMessage(MAIN_WINDOW_LABEL, { action: "request-table-info-context" });
   }
 
-  await initWindowLifecycle().catch((error) => console.error("[detached-panel] init window lifecycle failed", error));
+  try {
+    await initWindowLifecycle();
+    if (panel) await sendDetachedPanelMessageOrThrow(MAIN_WINDOW_LABEL, { action: "detached-panel-ready", panel });
+  } catch (error) {
+    console.error("[detached-panel] init window lifecycle failed", error);
+    await closeWindow();
+  }
 });
 
 onBeforeUnmount(() => {

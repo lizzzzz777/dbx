@@ -3,6 +3,7 @@ import capabilitiesJson from "../../../src-tauri/capabilities/default.json?raw";
 import mainSource from "./main.ts?raw";
 import detachedTabAppSource from "./DetachedTabApp.vue?raw";
 import detachedPanelAppSource from "./DetachedPanelApp.vue?raw";
+import detachedPanelSource from "./lib/detached/detachedPanel.ts?raw";
 import appSource from "./App.vue?raw";
 import queryStoreSource from "./stores/queryStore.ts?raw";
 
@@ -64,9 +65,16 @@ describe("detached tab window shell", () => {
     expect(detachedTabAppSource.match(/await destroyWindow\(\)/g)?.length).toBeGreaterThanOrEqual(3);
     // 主窗口侧：回执完成/失败分别 resolve/reject 分离调用方的等待。
     expect(appSource).toContain('case "detached-tab-adopted":');
-    expect(appSource).toContain("resolveDetachedTabAdoptAck(message.tabId)");
+    expect(appSource).toContain("resolveDetachedTabAdoptAck(message.tabId, sourceLabel)");
     expect(appSource).toContain('case "detached-tab-adopt-failed":');
-    expect(appSource).toContain('rejectDetachedTabAdoptAck(message.tabId, message.reason ?? "adopt failed")');
+    expect(appSource).toContain('rejectDetachedTabAdoptAck(message.tabId, message.reason ?? "adopt failed", sourceLabel)');
+  });
+
+  it("waits for normal panel creation and first-frame readiness before keeping detached state", () => {
+    expect(detachedPanelSource).toContain('window.once("tauri://created"');
+    expect(detachedPanelSource).toContain("waitForDetachedPanelReady(panel, label)");
+    expect(detachedPanelAppSource).toContain('action: "detached-panel-ready"');
+    expect(appSource).toContain("resolveDetachedPanelReady(message.panel, sourceLabel)");
   });
 
   it("transfers DataGrid pending changes with the detach snapshot in both directions", () => {
