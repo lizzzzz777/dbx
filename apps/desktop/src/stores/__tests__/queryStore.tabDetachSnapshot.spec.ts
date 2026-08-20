@@ -70,4 +70,38 @@ describe("prepareTabDetachSnapshot keeps result cache references", () => {
     expect(snapshot?.resultCacheKey).toBeUndefined();
     expect(snapshot?.resultEvicted).toBeUndefined();
   });
+
+  it("attaches DataGrid pending changes to the detach snapshot", async () => {
+    const { store } = await setupStoreWithCacheWrite();
+    const { stageDataGridPendingSnapshotsForTab } = await import("@/composables/useDataGridEditor");
+    const tabId = store.createTab("pg-1", "app", "users", "data", "public");
+    // 模拟主窗口 DataGrid 的未保存编辑（正常由 grid 经 pendingChangesCache 写入）。
+    stageDataGridPendingSnapshotsForTab(tabId, {
+      [tabId]: {
+        newRows: [["Ada"]],
+        newRowMeta: [{ token: 1, placement: null }],
+        dirtyRows: [[0, [[0, "Grace"]]]],
+        deletedRows: [1],
+        editingCell: null,
+        columnCount: 1,
+        rowCount: 2,
+      },
+    });
+
+    const snapshot = await store.prepareTabDetachSnapshot(tabId);
+    expect(snapshot?.dataGridPending?.[tabId]?.newRows).toEqual([["Ada"]]);
+    expect(snapshot?.dataGridPending?.[tabId]?.dirtyRows).toEqual([[0, [[0, "Grace"]]]]);
+    expect(snapshot?.dataGridPending?.[tabId]?.deletedRows).toEqual([1]);
+    // registry 经 localStorage JSON 交换：快照必须可 JSON 往返。
+    const roundTripped = JSON.parse(JSON.stringify(snapshot)) as typeof snapshot;
+    expect(roundTripped?.dataGridPending?.[tabId]?.newRows).toEqual([["Ada"]]);
+  });
+
+  it("omits dataGridPending when the tab has no pending grid changes", async () => {
+    const { store } = await setupStoreWithCacheWrite();
+    const tabId = store.createTab("pg-1", "app", "query_1", "query", "public", "select 1");
+
+    const snapshot = await store.prepareTabDetachSnapshot(tabId);
+    expect(snapshot?.dataGridPending).toBeUndefined();
+  });
 });

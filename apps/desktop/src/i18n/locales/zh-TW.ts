@@ -2807,6 +2807,8 @@ export default withEnglishFallback({
     unfixTab: "取消固定分頁",
     openInSeparateWindow: "用獨立視窗開啟",
     openInSeparateWindowFailed: "獨立視窗開啟失敗，分頁已保留在主視窗。",
+    detachTabExecuting: "分頁正在執行查詢或 Explain，請等待完成或停止後再分離。",
+    detachTabTransaction: "分頁存在未提交的交易，請先提交或回滾後再分離。",
     refreshTab: "重新整理資料",
     renameTab: "重新命名分頁",
     duplicateTab: "複製分頁",

@@ -2807,6 +2807,8 @@ export default withEnglishFallback({
     unfixTab: "Sblocca scheda",
     openInSeparateWindow: "Apri in una finestra separata",
     openInSeparateWindowFailed: "Apertura della finestra separata non riuscita. La scheda rimane nella finestra principale.",
+    detachTabExecuting: "La scheda sta eseguendo una query o un explain. Attendi il completamento o interrompila prima di staccarla.",
+    detachTabTransaction: "La scheda ha una transazione non confermata. Esegui il commit o il rollback prima di staccarla.",
     refreshTab: "Aggiorna Dati",
     renameTab: "Rinomina Scheda",
     duplicateTab: "Duplica Scheda",

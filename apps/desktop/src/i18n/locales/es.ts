@@ -2809,6 +2809,8 @@ export default withEnglishFallback({
     unfixTab: "Desfijar pestaña",
     openInSeparateWindow: "Abrir en una ventana independiente",
     openInSeparateWindowFailed: "No se pudo abrir la ventana independiente. La pestaña permanece en la ventana principal.",
+    detachTabExecuting: "La pestaña está ejecutando una consulta o un explain. Espera a que termine o deténla antes de separarla.",
+    detachTabTransaction: "La pestaña tiene una transacción sin confirmar. Confírmala o reviértela antes de separarla.",
     refreshTab: "Actualizar datos",
     renameTab: "Renombrar pestaña",
     duplicateTab: "Duplicar pestaña",

@@ -31,6 +31,7 @@ import MultiDbExecuteDialog from "@/components/editor/MultiDbExecuteDialog.vue";
 import { useDialogSources } from "@/composables/useDialogSources";
 import { useNavigationTargets } from "@/composables/useNavigationTargets";
 import { useDataGridActions } from "@/composables/useDataGridActions";
+import { stageDataGridPendingSnapshotsForTab } from "@/composables/useDataGridEditor";
 import { useTauriEvents } from "@/composables/useTauriEvents";
 import { useCloseActionPrompt, type AppCloseAction, type AppCloseRequestOptions } from "@/composables/useCloseActionPrompt";
 import { disposeAllSqlServerActivityTraces } from "@/lib/sqlserver/sqlServerActivityTraceRuntime";
@@ -131,8 +132,8 @@ import {
 } from "@/lib/detached/detachedPanel";
 import { hideDetachGhost } from "@/lib/detached/detachGhostWindow";
 import { currentTableInfoContext, dockTableInfoToOwner } from "@/lib/detached/tableInfoContextRegistry";
-import { clearDetachedTabsRegistry, closeDetachedTabWindow, ensureWarmDetachedTabShell, listDetachedTabEntries, markWarmShellReady, readDetachedTabEntry, removeDetachedTabEntry, restoreDetachedTabSnapshot } from "@/lib/detached/detachedTabs";
-import { detachTabToWindow } from "@/lib/detached/detachTabToWindow";
+import { clearDetachedTabsRegistry, closeDetachedTabWindow, ensureWarmDetachedTabShell, listDetachedTabEntries, markWarmShellReady, readDetachedTabEntry, rejectDetachedTabAdoptAck, removeDetachedTabEntry, resolveDetachedTabAdoptAck, restoreDetachedTabSnapshot } from "@/lib/detached/detachedTabs";
+import { detachTabFailureMessage, detachTabToWindow } from "@/lib/detached/detachTabToWindow";
 import { countActiveUpdateBlockingTasks } from "@/lib/app/appUpdateTaskGuard";
 import { initSavedSqlEditorPositions } from "@/lib/app/savedSqlEditorPosition";
 import { hasTreeNodeDatabaseContext } from "@/lib/sidebar/treeNodeContext";
@@ -963,6 +964,8 @@ async function handleDetachedTabDock(tabId: string) {
   removeDetachedTabEntry(tabId);
   if (restored) {
     // 连接已删除的页签不恢复（避免悬空引用），仅清理子窗口。
+    // DataGrid 待保存状态先于页签落地（grid 挂载/结果读回后按 cacheKey 取回）。
+    stageDataGridPendingSnapshotsForTab(tabId, entry.snapshot.dataGridPending);
     queryStore.adoptDetachedTab(restored);
     // activeTabId watch 会自动 reloadEvictedTab 从 IndexedDB 结果缓存读回结果（含 data 页签）。
   }
@@ -1019,6 +1022,7 @@ function restoreDetachedTabsOnStartup() {
     if (!restored) continue;
     // 连接已删除的页签直接丢弃（与 open-tabs 恢复对非 query 页签的处理一致）。
     if (restored.mode !== "query" && !validConnectionIds.has(restored.connectionId)) continue;
+    stageDataGridPendingSnapshotsForTab(restored.id, entry.snapshot.dataGridPending);
     queryStore.adoptDetachedTab(restored, { activate: false });
   }
   clearDetachedTabsRegistry();
@@ -1028,6 +1032,14 @@ function handleDetachedPanelMessage(message: DetachedPanelMessage) {
   switch (message.action) {
     case "detached-tab-shell-ready":
       markWarmShellReady(message.label);
+      break;
+    case "detached-tab-adopted":
+      // 子窗口已恢复并渲染页签：openDetachedTabWindow 的回执等待据此完成，调用方 finalize。
+      resolveDetachedTabAdoptAck(message.tabId);
+      break;
+    case "detached-tab-adopt-failed":
+      // 子窗口恢复失败并已自毁：回执等待按失败处理，触发回滚（页签保留在主窗口）。
+      rejectDetachedTabAdoptAck(message.tabId, message.reason ?? "adopt failed");
       break;
     case "detached-tab-dock":
       void handleDetachedTabDock(message.tabId);
@@ -2362,10 +2374,10 @@ async function onOpenObjectTable(target: { tableName: string; schema?: string; t
     // pendingDetach：创建即隐藏（页签栏/内容区不渲染），直达独立窗口，主窗口不闪现。
     const tabId = await openTableTarget(navigationTarget, { pendingDetach: true });
     if (!tabId) return;
-    const label = await detachTabToWindow(tabId, t);
-    if (!label) {
+    const detachResult = await detachTabToWindow(tabId, t);
+    if (!detachResult.ok) {
       queryStore.revealPendingDetachTab(tabId);
-      toast(t("contextMenu.openInSeparateWindowFailed"), 5000);
+      toast(detachTabFailureMessage(detachResult.reason, t), 5000);
     }
   } catch (error) {
     console.error("[detached-tab] open from object browser failed", error);

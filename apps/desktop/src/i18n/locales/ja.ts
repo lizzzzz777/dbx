@@ -2831,6 +2831,8 @@ export default withEnglishFallback({
     unfixTab: "タブの固定を解除",
     openInSeparateWindow: "別ウィンドウで開く",
     openInSeparateWindowFailed: "別ウィンドウを開けませんでした。タブはメインウィンドウに残っています。",
+    detachTabExecuting: "タブでクエリまたは Explain を実行中です。完了するか停止してから切り離してください。",
+    detachTabTransaction: "タブに未コミットのトランザクションがあります。コミットまたはロールバックしてから切り離してください。",
     refreshTab: "データを更新",
     renameTab: "タブ名を変更",
     duplicateTab: "タブを複製",

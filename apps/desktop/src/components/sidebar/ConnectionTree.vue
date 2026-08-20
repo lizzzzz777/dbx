@@ -75,7 +75,7 @@ import { createSidebarActionTarget, findSidebarActionTarget, matchesSidebarActio
 import { syncSidebarTreeNodeExpansion } from "@/lib/sidebar/sidebarTreeExpansion";
 import type { SidebarDangerDialogOption, SidebarDangerDialogRequest } from "@/lib/sidebar/sidebarDangerDialog";
 import { resetSidebarTreeDialogState, sidebarDangerRunningExecutionId } from "./sidebarTreeDialogState";
-import { detachTabToWindow } from "@/lib/detached/detachTabToWindow";
+import { detachTabFailureMessage, detachTabToWindow } from "@/lib/detached/detachTabToWindow";
 import { SidebarDangerConfirmDialog, SidebarDdlViewDialog, SidebarObjectSourceDialog, SidebarProcedureExecutionDialog, SidebarVisibleDatabasesDialog, SidebarVisibleNacosNamespacesDialog, SidebarVisibleSchemasDialog } from "./sidebarAsyncDialogs";
 import { sortConnectionListForDisplay } from "@/lib/sidebar/connectionListSort";
 import { sidebarDisplayTableName } from "@/lib/sidebar/sidebarTableNameDisplay";
@@ -1955,10 +1955,10 @@ function openSidebarProcedure(node: TreeNode, detached = false) {
  * 页签创建即带 pendingDetach 隐藏标记（直达独立窗口不闪现），失败时复位为可见。 */
 async function detachCreatedSidebarTabToSeparateWindow(tabId: string) {
   try {
-    const label = await detachTabToWindow(tabId, t);
-    if (!label) {
+    const result = await detachTabToWindow(tabId, t);
+    if (!result.ok) {
       queryStore.revealPendingDetachTab(tabId);
-      toast(t("contextMenu.openInSeparateWindowFailed"), 5000);
+      toast(detachTabFailureMessage(result.reason, t), 5000);
     }
   } catch (error) {
     queryStore.revealPendingDetachTab(tabId);

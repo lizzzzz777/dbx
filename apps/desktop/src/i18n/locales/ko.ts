@@ -2701,6 +2701,8 @@ export default withEnglishFallback({
     unfixTab: "탭 고정 해제",
     openInSeparateWindow: "별도 창에서 열기",
     openInSeparateWindowFailed: "별도 창을 열지 못했습니다. 탭이 기본 창에 유지됩니다.",
+    detachTabExecuting: "탭에서 쿼리 또는 Explain이 실행 중입니다. 완료되거나 중지된 후 분리하세요.",
+    detachTabTransaction: "탭에 커밋되지 않은 트랜잭션이 있습니다. 커밋하거나 롤백한 후 분리하세요.",
     refreshTab: "데이터 새로고침",
     renameTab: "탭 이름 변경",
     duplicateTab: "탭 복제",

@@ -2882,6 +2882,8 @@ export default {
     unfixTab: "Unfix Tab",
     openInSeparateWindow: "Open in Separate Window",
     openInSeparateWindowFailed: "Failed to open the detached window. The tab stays in the main window.",
+    detachTabExecuting: "The tab is running a query or explain. Wait for it to finish or stop it before detaching.",
+    detachTabTransaction: "The tab has an uncommitted transaction. Commit or roll it back before detaching.",
     refreshTab: "Refresh Data",
     renameTab: "Rename Tab",
     duplicateTab: "Duplicate Tab",

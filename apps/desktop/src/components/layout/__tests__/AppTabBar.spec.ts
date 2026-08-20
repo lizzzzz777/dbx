@@ -45,11 +45,12 @@ describe("AppTabBar detached tab window", () => {
     expect(tabBarSource).toContain("action: () => void detachTabToWindow(tab)");
   });
 
-  it("detaches through a prepare/finalize pair so a failed window leaves the tab intact", () => {
-    expect(tabBarSource).toContain("const snapshot = await queryStore.prepareTabDetachSnapshot(tab.id);");
-    expect(tabBarSource).toContain("if (!label) {");
-    expect(tabBarSource).toContain('toast(t("contextMenu.openInSeparateWindowFailed"), 5000);');
-    expect(tabBarSource).toContain("queryStore.finalizeTabDetach(tab.id);");
+  it("detaches through the shared ack-gated flow and surfaces block/failure reasons", () => {
+    // 页签栏分离委托共享实现：prepare → 子窗口 adopt 回执确认后 finalize，
+    // 失败回滚（页签保留）；执行中查询/未提交事务等不可迁移状态拒绝分离并明确提示。
+    expect(tabBarSource).toContain('import { detachTabFailureMessage, detachTabToWindow as detachTabToWindowShared } from "@/lib/detached/detachTabToWindow";');
+    expect(tabBarSource).toContain("const result = await detachTabToWindowShared(tab.id, t);");
+    expect(tabBarSource).toContain("if (!result.ok) toast(detachTabFailureMessage(result.reason, t), 5000);");
     expect(tabBarSource).toContain('console.error("[detached-tab] open failed", error);');
   });
 

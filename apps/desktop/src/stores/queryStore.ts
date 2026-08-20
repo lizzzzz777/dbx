@@ -56,7 +56,7 @@ import { agentProtocolQueryResultMaxRows, capQueryResultTotal, effectiveQueryRes
 import { elasticsearchRestRequestRanges, executableStatementRanges, splitSqlStatementRanges } from "@/lib/sql/sqlStatementRanges";
 import { replaceSqlServerLeadingUseQuery, sqlServerLeadingUseScript, sqlServerUseDatabaseFromStatement } from "@/lib/sql/sqlCompletionLookupTarget";
 import { externalSqlFileDisplayTitles, normalizeExternalSqlPath } from "@/lib/sql/sqlFileOpen";
-import { clearDataGridPendingSnapshot, clearDataGridPendingSnapshotsForTab } from "@/composables/useDataGridEditor";
+import { clearDataGridPendingSnapshot, clearDataGridPendingSnapshotsForTab, collectDataGridPendingSnapshotsForTab } from "@/composables/useDataGridEditor";
 import { buildTabResultSnapshot, deleteTabResultSnapshot, pruneTabResultSnapshots, readTabResultSnapshot, tabResultCacheKey, writeTabResultSnapshot } from "@/lib/tabs/tabResultCache";
 import { estimateQueryResultsBytes, selectInactiveResultEvictions } from "@/lib/tabs/queryResultSize";
 import { queryResultBaseSql, queryResultExecutionSql, resultGridInstanceKey } from "@/lib/tabs/tabPresentation";
@@ -2684,6 +2684,8 @@ export const useQueryStore = defineStore("query", () => {
    * 必须用 serializeDetachedTab（而非 serializeOpenTabs）：后者按重启恢复语义
    * 对 data 页签剔除 resultCacheKey、且仅在 resultEvicted 时携带缓存引用，
    * 会丢失结构草稿/编辑器视口等分离专属字段，导致子窗口拿不到结果。
+   * DataGrid 未保存编辑（newRows/dirtyRows/deletedRows）保存在窗口级缓存，
+   * 最后一步随快照一并转移（先结果落缓存再收集，缩小与 finalize 间的丢失窗口）。
    */
   async function prepareTabDetachSnapshot(id: string): Promise<DetachedTabSnapshot | undefined> {
     const tab = tabs.value.find((t) => t.id === id);
@@ -2693,7 +2695,10 @@ export const useQueryStore = defineStore("query", () => {
       const cached = await writeTabResultSnapshot(cacheKey, buildTabResultSnapshot(tab), tab.connectionId);
       if (cached) tab.resultCacheKey = cacheKey;
     }
-    return serializeDetachedTab(tab);
+    const snapshot = serializeDetachedTab(tab);
+    const dataGridPending = collectDataGridPendingSnapshotsForTab(id);
+    if (dataGridPending) snapshot.dataGridPending = dataGridPending;
+    return snapshot;
   }
 
   /**
