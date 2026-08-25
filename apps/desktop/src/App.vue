@@ -120,6 +120,7 @@ import { hasTreeNodeDatabaseContext } from "@/lib/sidebar/treeNodeContext";
 import { isSchemaAware, isSingleDatabase, usesTreeSchemaMode } from "@/lib/database/databaseFeatureSupport";
 import { codeMirrorSqlDialect, connectionUsesDatabaseObjectTreeMode, effectiveDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
 import { canFormatSqlForDatabaseType, formatSqlForEditing, sqlFormatDialectForDbType } from "@/lib/sql/sqlFormatter";
+import { formatSqlSnapshotForSave } from "@/lib/sql/sqlFormatOnSave";
 import { detectAndFormatStructured } from "@/lib/sql/autoFormat";
 import { formatMongoShellText } from "@/lib/mongo/mongoFormatter";
 import { detectAndFormatElasticsearchRequests } from "@/lib/elasticsearch/elasticsearchFormatter";
@@ -1224,36 +1225,30 @@ function savedSqlTargetForSave(tab: QueryTab) {
  */
 async function formattedSqlForSave(tab: QueryTab): Promise<string> {
   if (!settingsStore.editorSettings.formatSqlOnSqlFileSave) return tab.sql;
-  if (!tab.sql.trim()) return tab.sql;
+  const sqlSnapshot = tab.sql;
+  if (!sqlSnapshot.trim()) return sqlSnapshot;
   const connection = connectionStore.getConfig(tab.connectionId);
   const databaseType = effectiveDatabaseTypeForConnection(connection) ?? connection?.db_type;
-  if (!canFormatSqlForDatabaseType(databaseType)) return tab.sql;
+  if (!canFormatSqlForDatabaseType(databaseType)) return sqlSnapshot;
   try {
-    let formatted: string;
-    if (databaseType === "mongodb") {
-      formatted = formatMongoShellText(tab.sql, settingsStore.editorSettings.sqlFormatter);
-    } else {
-      const esRequest = detectAndFormatElasticsearchRequests(tab.sql, databaseType, settingsStore.editorSettings.sqlFormatter.tabWidth);
-      if (esRequest.kind === "elasticsearch") {
-        formatted = esRequest.formatted;
-      } else if (esRequest.kind === "unsupported") {
-        return tab.sql;
-      } else {
-        const structured = detectAndFormatStructured(tab.sql, {
+    return await formatSqlSnapshotForSave(
+      sqlSnapshot,
+      () => tab.sql,
+      async (sql) => {
+        if (databaseType === "mongodb") return formatMongoShellText(sql, settingsStore.editorSettings.sqlFormatter);
+        const esRequest = detectAndFormatElasticsearchRequests(sql, databaseType, settingsStore.editorSettings.sqlFormatter.tabWidth);
+        if (esRequest.kind === "elasticsearch") return esRequest.formatted;
+        if (esRequest.kind === "unsupported") return sql;
+        const structured = detectAndFormatStructured(sql, {
           indentSize: settingsStore.editorSettings.sqlFormatter.tabWidth,
           useTabs: settingsStore.editorSettings.sqlFormatter.useTabs,
         });
-        if (structured.kind === "json" || structured.kind === "xml") {
-          formatted = structured.formatted;
-        } else if (structured.kind === "unsupported") {
-          return tab.sql;
-        } else {
-          formatted = await formatSqlForEditing(tab.sql, sqlFormatDialectForDbType(databaseType), settingsStore.editorSettings.sqlFormatter);
-        }
-      }
-    }
-    if (formatted !== tab.sql) queryStore.updateSql(tab.id, formatted);
-    return formatted;
+        if (structured.kind === "json" || structured.kind === "xml") return structured.formatted;
+        if (structured.kind === "unsupported") return sql;
+        return formatSqlForEditing(sql, sqlFormatDialectForDbType(databaseType), settingsStore.editorSettings.sqlFormatter);
+      },
+      (formatted) => queryStore.updateSql(tab.id, formatted),
+    );
   } catch {
     return tab.sql;
   }
