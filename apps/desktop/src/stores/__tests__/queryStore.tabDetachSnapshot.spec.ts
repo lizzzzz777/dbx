@@ -105,3 +105,89 @@ describe("prepareTabDetachSnapshot keeps result cache references", () => {
     expect(snapshot?.dataGridPending).toBeUndefined();
   });
 });
+
+describe("concealTabForDetach freezes the tab before snapshot collection", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    setActivePinia(createPinia());
+  });
+
+  async function setupStore() {
+    const { useQueryStore } = await import("@/stores/queryStore");
+    return useQueryStore();
+  }
+
+  it("hides the tab and moves activation away so it can no longer be edited", async () => {
+    const store = await setupStore();
+    const firstId = store.createTab("pg-1", "app", "query_1", "query", "public", "select 1");
+    const secondId = store.createTab("pg-1", "app", "users", "data", "public");
+    expect(store.activeTabId).toBe(secondId);
+
+    store.concealTabForDetach(secondId);
+    const tab = store.tabs.find((item) => item.id === secondId)!;
+    expect(tab.pendingDetach).toBe(true);
+    expect(store.activeTabId).toBe(firstId);
+  });
+
+  it("keeps the current active tab when concealing an inactive tab", async () => {
+    const store = await setupStore();
+    const firstId = store.createTab("pg-1", "app", "query_1", "query", "public", "select 1");
+    const secondId = store.createTab("pg-1", "app", "users", "data", "public");
+    store.switchTab(secondId);
+    store.switchTab(firstId);
+
+    store.concealTabForDetach(secondId);
+    expect(store.activeTabId).toBe(firstId);
+  });
+
+  it("is a no-op for tabs already marked pendingDetach (new-tab detach flows)", async () => {
+    const store = await setupStore();
+    const firstId = store.createTab("pg-1", "app", "query_1", "query", "public", "select 1");
+    const hiddenId = store.createTab("pg-1", "app", "users", "data", "public", undefined, undefined, { activate: false, pendingDetach: true });
+    expect(store.activeTabId).toBe(firstId);
+
+    store.concealTabForDetach(hiddenId);
+    expect(store.activeTabId).toBe(firstId);
+    expect(store.tabs.find((item) => item.id === hiddenId)?.pendingDetach).toBe(true);
+  });
+
+  it("revealPendingDetachTab restores visibility and activation after conceal", async () => {
+    const store = await setupStore();
+    const firstId = store.createTab("pg-1", "app", "query_1", "query", "public", "select 1");
+    const secondId = store.createTab("pg-1", "app", "users", "data", "public");
+
+    store.concealTabForDetach(secondId);
+    expect(store.activeTabId).toBe(firstId);
+    store.revealPendingDetachTab(secondId);
+    const tab = store.tabs.find((item) => item.id === secondId)!;
+    expect(tab.pendingDetach).toBeUndefined();
+    expect(store.activeTabId).toBe(secondId);
+  });
+
+  it("still collects pre-conceal grid edits into the snapshot (state survives conceal)", async () => {
+    vi.doMock("@/lib/tabs/tabResultCache", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("@/lib/tabs/tabResultCache")>();
+      return { ...actual, writeTabResultSnapshot: vi.fn(async () => true) };
+    });
+    const { useQueryStore } = await import("@/stores/queryStore");
+    const { stageDataGridPendingSnapshotsForTab } = await import("@/composables/useDataGridEditor");
+    const store = useQueryStore();
+    const tabId = store.createTab("pg-1", "app", "users", "data", "public");
+    stageDataGridPendingSnapshotsForTab(tabId, {
+      [tabId]: {
+        newRows: [["Ada"]],
+        newRowMeta: [{ token: 1, placement: null }],
+        dirtyRows: [],
+        deletedRows: [],
+        editingCell: null,
+        columnCount: 1,
+        rowCount: 2,
+      },
+    });
+
+    store.concealTabForDetach(tabId);
+    const snapshot = await store.prepareTabDetachSnapshot(tabId);
+    expect(snapshot?.dataGridPending?.[tabId]?.newRows).toEqual([["Ada"]]);
+  });
+});

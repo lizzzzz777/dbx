@@ -2891,7 +2891,13 @@ function activateTabFromHistory(direction: -1 | 1): boolean {
   return false;
 }
 
-const tabSwitcherTabs = computed(() => tabSwitcherOrder(queryStore.tabs, queryStore.recentTabIds));
+// 跳过待分离的隐藏页签（pendingDetach），与页签栏/索引切换的可见集合保持一致。
+const tabSwitcherTabs = computed(() =>
+  tabSwitcherOrder(
+    queryStore.tabs.filter((tab) => !tab.pendingDetach),
+    queryStore.recentTabIds,
+  ),
+);
 const tabSwitcherShortcutHint = computed(() => formatShortcutDisplay(settingsStore.editorSettings.shortcuts.tabSwitcher));
 
 function handleTabSwitcherShortcut(direction: -1 | 1, e: KeyboardEvent): boolean {

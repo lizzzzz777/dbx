@@ -2432,6 +2432,22 @@ export const useQueryStore = defineStore("query", () => {
     switchTab(id);
   }
 
+  /**
+   * 分离前置的「隐藏并冻结」：置 pendingDetach 让页签栏不再渲染，激活态让位给最近
+   * 页签（grid/编辑器随失活把待保存状态冲刷进窗口级缓存）。此后到 finalize 期间用户
+   * 无法再编辑该页签，消除慢路径建窗期间主窗口编辑在 finalize 清缓存时丢失的窗口。
+   * 失败/取消时由 revealPendingDetachTab 复位，页签无损失回主窗口。
+   */
+  function concealTabForDetach(id: string) {
+    const tab = tabs.value.find((t) => t.id === id);
+    if (!tab || tab.pendingDetach) return;
+    tab.pendingDetach = true;
+    if (activeTabId.value === id) {
+      const idx = tabs.value.findIndex((t) => t.id === id);
+      activeTabId.value = fallbackActiveTabAfterClose(id, idx);
+    }
+  }
+
   function isTabDirty(tab: QueryTab): boolean {
     if (tab.mode === "structure") {
       // Legacy persisted structure drafts predate the dirty flag; treat them as dirty until the editor rehydrates them.
@@ -2685,7 +2701,8 @@ export const useQueryStore = defineStore("query", () => {
    * 对 data 页签剔除 resultCacheKey、且仅在 resultEvicted 时携带缓存引用，
    * 会丢失结构草稿/编辑器视口等分离专属字段，导致子窗口拿不到结果。
    * DataGrid 未保存编辑（newRows/dirtyRows/deletedRows）保存在窗口级缓存，
-   * 最后一步随快照一并转移（先结果落缓存再收集，缩小与 finalize 间的丢失窗口）。
+   * 最后一步随快照一并转移。调用前应先 concealTabForDetach 隐藏并冻结页签，
+   * 保证收集后页签不再可编辑（慢路径建窗期间的编辑不再可能丢失）。
    */
   async function prepareTabDetachSnapshot(id: string): Promise<DetachedTabSnapshot | undefined> {
     const tab = tabs.value.find((t) => t.id === id);
@@ -6812,6 +6829,7 @@ export const useQueryStore = defineStore("query", () => {
     prepareTabDetachSnapshot,
     finalizeTabDetach,
     adoptDetachedTab,
+    concealTabForDetach,
     revealPendingDetachTab,
     exportResultArchive,
     importResultArchive,
