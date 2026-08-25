@@ -31,6 +31,10 @@ function stubMemoryLocalStorage() {
     getItem: (key: string) => store.get(key) ?? null,
     setItem: (key: string, value: string) => void store.set(key, value),
     removeItem: (key: string) => void store.delete(key),
+    get length() {
+      return store.size;
+    },
+    key: (index: number) => [...store.keys()][index] ?? null,
   });
   return store;
 }
@@ -100,6 +104,41 @@ describe("detachedTabs registry", () => {
 
   it("updateDetachedTabSnapshot is a no-op for unknown tabs", () => {
     updateDetachedTabSnapshot("missing", makeSnapshot());
+    expect(listDetachedTabEntries()).toHaveLength(0);
+  });
+
+  it("keeps entries isolated per tab so one writer cannot clobber another tab's entry", () => {
+    // 回归：旧版单 key JSON map 下，子窗口防抖同步与主窗口写入并发时会整图覆写丢条目。
+    writeDetachedTabEntry("tab-1", { snapshot: makeSnapshot(), label: "panel-tab-tab-1", title: "query_1", detachedAt: 1, updatedAt: 1 });
+    writeDetachedTabEntry("tab-2", { snapshot: makeSnapshot({ id: "tab-2" }), label: "panel-tab-tab-2", title: "query_2", detachedAt: 2, updatedAt: 2 });
+
+    // 子窗口同步 tab-1 快照（只触 tab-1 的 key）。
+    updateDetachedTabSnapshot("tab-1", makeSnapshot({ sql: "select 9" }));
+    // 主窗口随后移除 tab-2（dock）。
+    removeDetachedTabEntry("tab-2");
+
+    const remaining = listDetachedTabEntries();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]?.label).toBe("panel-tab-tab-1");
+    expect(remaining[0]?.snapshot.sql).toBe("select 9");
+  });
+
+  it("migrates the legacy single-key registry into per-tab keys on list", () => {
+    const store = stubMemoryLocalStorage();
+    store.set(
+      "dbx-detached-tabs-registry",
+      JSON.stringify({
+        "tab-legacy": { snapshot: makeSnapshot({ id: "tab-legacy" }), label: "panel-tab-tab-legacy", title: "legacy", detachedAt: 1, updatedAt: 1 },
+      }),
+    );
+
+    const entries = listDetachedTabEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.label).toBe("panel-tab-tab-legacy");
+    // 旧 key 已迁移并清除，后续读写走按页签分 key。
+    expect(store.has("dbx-detached-tabs-registry")).toBe(false);
+    expect(readDetachedTabEntry("tab-legacy")?.title).toBe("legacy");
+    removeDetachedTabEntry("tab-legacy");
     expect(listDetachedTabEntries()).toHaveLength(0);
   });
 

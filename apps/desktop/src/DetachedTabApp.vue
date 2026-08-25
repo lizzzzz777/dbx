@@ -754,6 +754,10 @@ onMounted(async () => {
   unlistenMessages = await listenDetachedPanelMessages((message) => {
     if (message.action === "detached-tab-assign") {
       void adoptTab(message.tabId, message.x, message.y);
+    } else if (message.action === "detached-tab-dock-failed") {
+      // 主窗口找不到 registry 条目（异常清理/存储清空）：复位 dock 状态，恢复窗口可用性
+      // （标题栏 X/系统关闭在 dockRequested 期间被屏蔽）。
+      if (message.tabId === tabId.value) dockRequested = false;
     } else if (message.action === "app-settings-sync") {
       void applySyncedAppSettings(message.uiScale);
     }

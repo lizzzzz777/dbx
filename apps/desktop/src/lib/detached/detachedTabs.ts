@@ -12,7 +12,7 @@
  * 延迟优化：主窗口空闲时预热一个隐藏 shell 子窗口（完成前端 bundle 加载与 store
  * 初始化），分离时直接分配页签并 show，省掉 webview 冷启动开销。
  */
-import { safeLocalStorageGet, safeLocalStorageRemove, safeLocalStorageSet } from "@/lib/backend/safeStorage";
+import { safeLocalStorageGet, safeLocalStorageKeysWithPrefix, safeLocalStorageRemove, safeLocalStorageSet } from "@/lib/backend/safeStorage";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
 import { DETACHED_TAB_PARAM, DETACHED_TAB_SHELL_PARAM } from "@/lib/detached/detachedWindowContext";
 import { MAIN_WINDOW_LABEL, loadDetachedWindowPlacement, openDetachedWebviewWindow, sendDetachedPanelMessageOrThrow } from "@/lib/detached/detachedPanel";
@@ -100,9 +100,20 @@ function detachedTabShellUrl(): string {
 
 // ---------------------------------------------------------------------------
 // registry（localStorage，跨窗口共享；主窗口 localStorage 为权威）
+//
+// 按页签分 key 存储：主窗口（分离写入/dock 移除/启动清理）与子窗口（防抖同步快照）
+// 都只读写各自页签的 key，避免单一 JSON map 的读-改-写在跨窗口并发下丢失整个条目
+// （曾导致 dock 时主窗口读不到条目、子窗口 dockRequested 卡死、标题栏 X 失效）。
+// 同一页签 key 上的写者序为 last-writer-wins（dock 时序：子窗口先同步快照再发消息，
+// 主窗口随后读取并移除）；子窗口的防抖更新带「条目缺失则跳过」守卫，不会在主窗口
+// 移除后复活幻影条目。
 // ---------------------------------------------------------------------------
 
+/** 旧版合并 registry key（仅用于启动时迁移到按页签分 key）。 */
 const DETACHED_TABS_REGISTRY_KEY = "dbx-detached-tabs-registry";
+const DETACHED_TAB_ENTRY_PREFIX = "dbx-detached-tab:";
+
+const detachedTabEntryKey = (tabId: string) => `${DETACHED_TAB_ENTRY_PREFIX}${tabId}`;
 
 export interface DetachedTabRegistryEntry {
   /** 页签快照（结果数据经 resultCacheKey 引用 IndexedDB 缓存）。 */
@@ -115,57 +126,69 @@ export interface DetachedTabRegistryEntry {
   updatedAt: number;
 }
 
-type DetachedTabsRegistry = Record<string, DetachedTabRegistryEntry>;
-
-function readRegistry(): DetachedTabsRegistry {
-  const raw = safeLocalStorageGet(DETACHED_TABS_REGISTRY_KEY);
-  if (!raw) return {};
+function parseDetachedTabEntry(raw: string | null): DetachedTabRegistryEntry | null {
+  if (!raw) return null;
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return parsed as DetachedTabsRegistry;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed as DetachedTabRegistryEntry;
   } catch {
-    return {};
+    return null;
   }
 }
 
-function writeRegistry(registry: DetachedTabsRegistry): void {
-  safeLocalStorageSet(DETACHED_TABS_REGISTRY_KEY, JSON.stringify(registry));
+/** 旧版合并 registry（单 key JSON map）迁移为按页签分 key；幂等，启动恢复时调用。 */
+function migrateLegacyDetachedTabsRegistry(): void {
+  const raw = safeLocalStorageGet(DETACHED_TABS_REGISTRY_KEY);
+  if (!raw) return;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      for (const [tabId, entry] of Object.entries(parsed as Record<string, unknown>)) {
+        if (entry && typeof entry === "object") safeLocalStorageSet(detachedTabEntryKey(tabId), JSON.stringify(entry));
+      }
+    }
+  } catch {
+    // 损坏的旧格式直接丢弃（与旧版 readRegistry 的容错语义一致）。
+  }
+  safeLocalStorageRemove(DETACHED_TABS_REGISTRY_KEY);
 }
 
 /** 写入/更新页签的分离快照（子窗口防抖同步最新状态时复用）。 */
 export function writeDetachedTabEntry(tabId: string, entry: DetachedTabRegistryEntry): void {
-  const registry = readRegistry();
-  registry[tabId] = entry;
-  writeRegistry(registry);
+  safeLocalStorageSet(detachedTabEntryKey(tabId), JSON.stringify(entry));
 }
 
-/** 子窗口防抖同步：仅更新快照与 updatedAt，保留 label/title/detachedAt。 */
+/** 子窗口防抖同步：仅更新快照与 updatedAt，保留 label/title/detachedAt。条目缺失时跳过（不复活已 dock/回滚的条目）。 */
 export function updateDetachedTabSnapshot(tabId: string, snapshot: DetachedTabSnapshot): void {
-  const registry = readRegistry();
-  const existing = registry[tabId];
+  const existing = readDetachedTabEntry(tabId);
   if (!existing) return;
-  registry[tabId] = { ...existing, snapshot, updatedAt: Date.now() };
-  writeRegistry(registry);
+  writeDetachedTabEntry(tabId, { ...existing, snapshot, updatedAt: Date.now() });
 }
 
 export function readDetachedTabEntry(tabId: string): DetachedTabRegistryEntry | null {
-  return readRegistry()[tabId] ?? null;
+  return parseDetachedTabEntry(safeLocalStorageGet(detachedTabEntryKey(tabId)));
 }
 
 export function removeDetachedTabEntry(tabId: string): void {
-  const registry = readRegistry();
-  if (!(tabId in registry)) return;
-  delete registry[tabId];
-  writeRegistry(registry);
+  safeLocalStorageRemove(detachedTabEntryKey(tabId));
 }
 
 /** 列出全部分离中的页签（主窗口启动时恢复用）。 */
 export function listDetachedTabEntries(): DetachedTabRegistryEntry[] {
-  return Object.values(readRegistry());
+  migrateLegacyDetachedTabsRegistry();
+  const entries: DetachedTabRegistryEntry[] = [];
+  for (const key of safeLocalStorageKeysWithPrefix(DETACHED_TAB_ENTRY_PREFIX)) {
+    const entry = parseDetachedTabEntry(safeLocalStorageGet(key));
+    if (entry) entries.push(entry);
+  }
+  return entries;
 }
 
 export function clearDetachedTabsRegistry(): void {
+  for (const key of safeLocalStorageKeysWithPrefix(DETACHED_TAB_ENTRY_PREFIX)) {
+    safeLocalStorageRemove(key);
+  }
   safeLocalStorageRemove(DETACHED_TABS_REGISTRY_KEY);
 }
 

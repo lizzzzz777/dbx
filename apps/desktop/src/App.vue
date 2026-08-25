@@ -968,9 +968,14 @@ async function dockDetachedTableInfoPanel() {
 let unlistenDetachedPanelMessages: (() => void) | null = null;
 
 /** 合并分离页签回主窗口：从 registry 读最新快照恢复页签，关闭子窗口。 */
-async function handleDetachedTabDock(tabId: string) {
+async function handleDetachedTabDock(tabId: string, sourceLabel: string) {
   const entry = readDetachedTabEntry(tabId);
-  if (!entry) return;
+  if (!entry) {
+    // 条目缺失（异常清理/存储被清空）：无法恢复页签，但需通知子窗口复位 dockRequested，
+    // 否则子窗口停留在「dock 进行中」状态，标题栏 X 与系统关闭都会被屏蔽。
+    void sendDetachedPanelMessage(sourceLabel, { action: "detached-tab-dock-failed", tabId });
+    return;
+  }
   const restored = restoreDetachedTabSnapshot(entry.snapshot);
   removeDetachedTabEntry(tabId);
   if (restored) {
@@ -1056,7 +1061,7 @@ function handleDetachedPanelMessage(message: DetachedPanelMessage, sourceLabel: 
       rejectDetachedTabAdoptAck(message.tabId, message.reason ?? "adopt failed", sourceLabel);
       break;
     case "detached-tab-dock":
-      void handleDetachedTabDock(message.tabId);
+      void handleDetachedTabDock(message.tabId, sourceLabel);
       break;
     case "detached-tab-open-sql-file":
       void openSqlFile();

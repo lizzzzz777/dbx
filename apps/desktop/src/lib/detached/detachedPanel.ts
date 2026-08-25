@@ -175,6 +175,7 @@ export type DetachedPanelMessage =
   | { action: "detached-tab-adopt-failed"; tabId: string; reason?: string }
   /** 分离页签子窗口 → 主窗口：合并回主窗口（最新快照已写入 registry）。 */
   | { action: "detached-tab-dock"; tabId: string }
+  | { action: "detached-tab-dock-failed"; tabId: string }
   /** 分离页签子窗口 → 主窗口：在主窗口打开 SQL 文件 / 导入结果归档。 */
   | { action: "detached-tab-open-sql-file" }
   | { action: "detached-tab-import-result-archive" }
